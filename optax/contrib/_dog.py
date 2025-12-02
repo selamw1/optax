@@ -47,6 +47,7 @@ def scale_by_dog(
     init_step: tuple[Literal["distance", "learning_rate", "heuristic"],
                      jax.typing.ArrayLike],
     eps: jax.typing.ArrayLike = 1e-8,
+    layer_wise: bool = False,
 ) -> base.GradientTransformation:
   r"""Scale by Distance over Gradients (DoG).
 
@@ -55,6 +56,9 @@ def scale_by_dog(
   Args:
     init_step: Initial step specification.
     eps: Epsilon used for numerical stability.
+    layer_wise: If ``True``, computes the DoG step size per-layer, which is
+      equivalent to the LDoG algorithm in the paper. If ``False``, computes a
+      single step size for all layers.
 
   Returns:
     The corresponding :class:`optax.GradientTransformation`.
@@ -70,6 +74,9 @@ def scale_by_dog(
 
   init_step_type, init_step_value = init_step
 
+  def _l2(x, y=0.0):
+    return jnp.sqrt(jnp.square(x - y).sum())
+
   def init_fn(params: base.Params) -> DoGState:
     # Define state parameters with the lowest dtype of the parameters to avoid
     # dtype promotion of parameters resulting in a dtype mismatch between
@@ -79,7 +86,12 @@ def scale_by_dog(
     if init_step_type == "distance":
       r_epsilon = init_step_value
     elif init_step_type == "heuristic":
-      r_epsilon = init_step_value * (1 + optax.tree.norm(params))
+      if layer_wise:
+        r_epsilon = jax.tree.map(
+            lambda p: init_step_value * (1 + _l2(p)), params
+        )
+      else:
+        r_epsilon = init_step_value * (1 + optax.tree.norm(params))
     elif init_step_type == "learning_rate":
       r_epsilon = 0.0
     else:
@@ -87,22 +99,44 @@ def scale_by_dog(
           f"Invalid init_step specification for scale_by_dog: {init_step_type=}"
       )
 
+    sum_sq_norm_grads_shape = ()
+    if layer_wise:
+      sum_sq_norm_grads_shape = (1,)
+
     return DoGState(
         is_init_step=jnp.asarray(True),
         init_params=params,
         max_dist=jnp.asarray(r_epsilon, dtype=params_dtype),
-        sum_sq_norm_grads=jnp.asarray(0.0, dtype=params_dtype),
+        sum_sq_norm_grads=jnp.asarray(
+            0.0, dtype=params_dtype
+        ).reshape(sum_sq_norm_grads_shape),
     )
 
   def update_fn(
       updates: base.Updates, state: DoGState, params: base.Params
   ) -> tuple[base.Updates, DoGState]:
-    dist = optax.tree.norm(optax.tree.sub(state.init_params, params))
-    max_dist = jnp.maximum(state.max_dist, dist)
-    sum_sq_norm_grads = state.sum_sq_norm_grads + optax.tree.norm(
-        updates, squared=True
-    )
-    learning_rate = max_dist / jnp.sqrt(sum_sq_norm_grads + eps)
+    if layer_wise:
+      dist = jax.tree.map(
+          lambda p, ip: _l2(p, ip), params, state.init_params
+      )
+      max_dist = jax.tree.map(jnp.maximum, state.max_dist, dist)
+      sum_sq_norm_grads = jax.tree.map(
+          lambda s, u: s + jnp.square(u).sum(),
+          state.sum_sq_norm_grads,
+          updates,
+      )
+      learning_rate = jax.tree.map(
+          lambda md, ssng: md / jnp.sqrt(ssng + eps),
+          max_dist,
+          sum_sq_norm_grads,
+      )
+    else:
+      dist = optax.tree.norm(optax.tree.sub(state.init_params, params))
+      max_dist = jnp.maximum(state.max_dist, dist)
+      sum_sq_norm_grads = state.sum_sq_norm_grads + optax.tree.norm(
+          updates, squared=True
+      )
+      learning_rate = max_dist / jnp.sqrt(sum_sq_norm_grads + eps)
 
     if init_step_type == "learning_rate":
       learning_rate = jnp.where(
@@ -128,6 +162,7 @@ def dog(
     eps: jax.typing.ArrayLike = 1e-8,
     weight_decay: Optional[jax.typing.ArrayLike] = None,
     mask: Optional[Union[Any, Callable[[base.Params], Any]]] = None,
+    layer_wise: bool = False,
 ):
   r"""Distance over Gradients (DoG) optimizer.
 
@@ -169,6 +204,9 @@ def dog(
       The leaves should be booleans, `True` for leaves/subtrees you want to
       apply the weight decay to, and `False` for those you want to skip. Note
       that the gradient transformations is applied to all parameters.
+    layer_wise: If ``True``, computes the DoG step size per-layer, which is
+      equivalent to the LDoG algorithm in the paper. If ``False``, computes a
+      single step size for all layers.
 
   Returns:
     The corresponding :class:`optax.GradientTransformation`.
@@ -212,7 +250,7 @@ def dog(
       transform.add_decayed_weights(weight_decay, mask)
       if weight_decay is not None
       else base.identity(),
-      scale_by_dog(init_step, eps),
+      scale_by_dog(init_step, eps, layer_wise),
       transform.scale_by_learning_rate(learning_rate),
   )
 

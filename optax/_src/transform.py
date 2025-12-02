@@ -1352,6 +1352,10 @@ def scale_by_distance_over_gradients(
 ) -> base.GradientTransformation:
   """Distance-over-gradients learning rate-free optimizer.
 
+  .. deprecated:: 0.2.3
+      Please use :func:`optax.contrib.scale_by_dog` instead, with
+      ``layer_wise=True``.
+
   This implementation stores a single copy of the model parameters, plus two
   scalars per parameter array. It is equivalent to "Layer-wise DoG" (LDoG)
   in the paper.
@@ -1372,49 +1376,13 @@ def scale_by_distance_over_gradients(
     Ivgi et al, `DoG is SGD's Best Friend: A Parameter-Free Dynamic Step Size
     Schedule <https://arxiv.org/pdf/2302.12022.pdf>`_, 2023
   """
+  from optax.contrib import _dog
 
-  def _l2(x, y=0.0):
-    return jnp.sqrt(jnp.square(x - y).sum())
-
-  def init_fn(params):
-    return ScaleByDistanceOverGradientsState(
-        # Initial distance (needed to prevent zero step sizes).
-        jax.tree.map(lambda x: reps_rel * (1 + _l2(x)), params),
-        # Initial gradient sum-of-squares.
-        jax.tree.map(lambda x: jnp.zeros(1), params),
-        # Initial params, cast to preferred precision.
-        optax.tree.cast(params, param_dtype),
-    )
-
-  def update_fn(updates, state: ScaleByDistanceOverGradientsState, params):
-    # update max distance
-    max_dist = jax.tree.map(
-        lambda d, x, y: jnp.maximum(d, _l2(x, y)),
-        state.max_dist,
-        params,
-        state.init_params,
-    )
-
-    # update gradient sum-of-squares
-    g_sos = jax.tree.map(
-        lambda x, y: x + jnp.square(y).sum(), state.grad_sum_of_squares, updates
-    )
-
-    def _tx(g, d, g_sos):
-      """Apply the transformation."""
-      eta = global_scale * (d / jnp.sqrt(g_sos + eps))
-      return eta * g
-
-    updates = jax.tree.map(_tx, max_dist, g_sos, updates)
-
-    # new state
-    state = ScaleByDistanceOverGradientsState(
-        max_dist, g_sos, state.init_params
-    )
-
-    return updates, state
-
-  return base.GradientTransformation(init_fn, update_fn)
+  return _dog.scale_by_dog(
+      init_step=("heuristic", reps_rel),
+      eps=eps,
+      layer_wise=True,
+  )
 
 
 def scale_by_polyak(
