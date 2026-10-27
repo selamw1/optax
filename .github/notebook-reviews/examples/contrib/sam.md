@@ -1,17 +1,4 @@
----
-jupyter:
-  jupytext:
-    text_representation:
-      extension: .md
-      format_name: markdown
-      format_version: '1.3'
-      jupytext_version: 1.17.3
-  kernelspec:
-    display_name: Python 3
-    name: python3
----
-
-<!-- #region id="qEIr4kn4W6Zs" -->
+<!-- #region -->
 # Sharpness-Aware Minimization (SAM)
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.sandbox.google.com/github/google-deepmind/optax/blob/main/examples/sam.ipynb)
@@ -20,7 +7,7 @@ jupyter:
 This serves a testing ground for a simple SAM type optimizer implementation in JAX with existing apis.
 <!-- #endregion -->
 
-```python id="AxR7ryYMXHcr"
+```python
 from typing import NamedTuple
 
 import jax
@@ -30,7 +17,6 @@ import optax
 from optax import contrib
 ```
 
-<!-- #region id="ImgJJV9_iq-v" -->
 ## Transparent Mode
 
 This implementation of SAM can be used in two different modes: transparent and opaque.
@@ -38,9 +24,8 @@ This implementation of SAM can be used in two different modes: transparent and o
  - Opaque mode hides the adversarial updates from the training loop, which is necessary when other state depends on the updates, such as BatchNorm parameters.
 
 Opaque mode is slightly more work to set up, so we will start with transparent mode.
-<!-- #endregion -->
 
-<!-- #region id="TocZvhcDJoyY" -->
+
 One way to describe what SAM does is that it does some number of steps (usually 1) of adversarial updates, followed by an outer gradient update.
 
 What this means is that we have to do a bunch of steps:
@@ -53,15 +38,13 @@ What this means is that we have to do a bunch of steps:
     params = cache - learning_rate * gradient
     cache = params
 
-<!-- #endregion -->
 
-<!-- #region id="7-p_W8vkhnO1" -->
+
 To actually use SAM then, you create your adversarial optimizer, here SGD with normalized gradients, an outer optimizer, and then wrap them with SAM.
 
 The drop-in SAM optimizer described in the paper uses SGD for both optimizers.
-<!-- #endregion -->
 
-```python id="ueMKkNw7jLNJ"
+```python
 lr = 0.01
 rho = 0.1
 opt = optax.sgd(lr)
@@ -71,11 +54,9 @@ sam_opt = contrib.sam(opt, adv_opt, sync_period=2)  # This is the drop-in SAM op
 sgd_opt = optax.sgd(lr)  # Baseline SGD optimizer
 ```
 
-<!-- #region id="jgFuHGHPAIfU" -->
 However, it is possible to use SGD for the adversarial optimizer, and, for example, SGD with momentum for the outer optimizer.
-<!-- #endregion -->
 
-```python id="TsLVwjHywg55"
+```python
 def sam_mom(lr=1e-3, momentum=0.1, rho=0.1, sync_period=2):
   opt = optax.sgd(lr, momentum=momentum)
   adv_opt = optax.chain(contrib.normalize(), optax.sgd(rho))
@@ -86,11 +67,9 @@ sam_mom_opt = sam_mom(lr, momentum=mom)
 mom_opt = optax.sgd(lr, momentum=mom)
 ```
 
-<!-- #region id="K6CCwKIIASsN" -->
 It's even possible to use Adam for **both** optimizers. In this case, we'll need to increase the number of adversarial steps between syncs, but the resulting optimization will still be much faster than using SGD by itself with SAM.
-<!-- #endregion -->
 
-```python id="0FesjRbUsT80"
+```python
 def sam_adam(lr=1e-3, b1=0.9, b2=0.999, rho=0.03, sync_period=5):
   """A SAM optimizer using Adam for the outer optimizer."""
   opt = optax.adam(lr, b1=b1, b2=b2)
@@ -101,11 +80,9 @@ sam_adam_opt = sam_adam(lr)
 adam_opt = optax.adam(lr)
 ```
 
-<!-- #region id="DyTChHZr2Yw6" -->
 We'll set up a simple test problem below, we're going to try to optimize a sum of two exponentials that has two minima, one at (0,0) and another at (2,0) and compare the performance of both SAM and ordinary SGD.
-<!-- #endregion -->
 
-```python id="PSE3mM2FZGio"
+```python
 # An example 2D loss function. It has two minima at (0,0) and (2,0).
 # Both points attain almost zero loss value, but the first one is much sharper.
 
@@ -122,7 +99,7 @@ plt.title('Loss Surface')
 plt.show();
 ```
 
-```python id="Zi3tzM1AZbN_"
+```python
 params = np.array([-0.4, -0.4])
 
 class Store(NamedTuple):
@@ -138,21 +115,21 @@ sam_adam_store = Store(params=params, state=sam_adam_opt.init(params))
 adam_store = Store(params=params, state=adam_opt.init(params))
 ```
 
-```python id="UhFr0AwqZjRk"
+```python
 def make_step(opt):
   @jax.jit
   def step(store):
     value, grads = jax.value_and_grad(loss)(store.params)
     updates, state = opt.update(grads, store.state, store.params)
     params = optax.apply_updates(store.params, updates)
-    return store.replace(
+    return store._replace(
         params=params,
         state=state,
         step=store.step+1), value
   return step
 ```
 
-```python id="bTkjju6IinJx"
+```python
 sam_step = make_step(sam_opt)
 sgd_step = make_step(sgd_opt)
 
@@ -163,7 +140,7 @@ sam_adam_step = make_step(sam_adam_opt)
 adam_step = make_step(adam_opt)
 ```
 
-```python id="MEF-PriWcLSa"
+```python
 sam_vals = []
 sam_params = []
 sgd_vals = []
@@ -180,7 +157,7 @@ adam_vals = []
 adam_params = []
 ```
 
-```python id="8Em3xy9PaEbH"
+```python
 T = 8000
 for i in range(T):
   sam_store, sam_val = sam_step(sam_store)
@@ -205,7 +182,7 @@ for i in range(T):
   adam_params.append(adam_store.params)
 ```
 
-```python id="sCrf_qJzdDmk"
+```python
 ts = np.arange(T)
 fig, axs = plt.subplots(6, figsize=(10, 12))
 axs[0].plot(ts, sgd_vals, label='SGD')
@@ -236,11 +213,9 @@ axs[5].plot(ts[::5] / 5, sam_adam_vals[::5], label='1/5 SAM Adam', lw=3)
 axs[5].legend();
 ```
 
-<!-- #region id="kEmX6vdp_n50" -->
 On this problem, SAM Mom is the fastest of the three SAM optimizers in terms of real steps, but in terms of outer gradient steps, SAM Adam is slightly faster, since it has 4 inner gradient steps for every outer gradient step, compared with 1 inner per outer for SAM and SAM Mom.
-<!-- #endregion -->
 
-```python id="o1kIeonUeA0x"
+```python
 fig, axs = plt.subplots(ncols=3, figsize=(8 * 3, 6))
 axs[0].plot(*np.array(sgd_params).T, label='SGD')
 axs[0].plot(*np.array(sam_params)[1::2].T, label='SAM Outer Steps', zorder=100)
@@ -258,15 +233,13 @@ axs[2].plot(*np.array(sam_adam_params)[3::5].T, label='SAM Adam Adv Steps', alph
 axs[2].legend(loc=4);
 ```
 
-<!-- #region id="8nVNiUsweApJ" -->
 As you can see, all three SAM optimizers find the smooth optimum, while all three standard optimizers get stuck in the sharp optimum.
 
 SAM and SAM Mom follow fairly similar paths (although SAM Mom is much faster), but Sam Adam actually passes through the sharp optimum on the way to the smooth optimum.
 
 The adversarial steps are quite different between the three SAM optimizers, demonstrating that the choice of both outer and inner optimizer have strong impacts on how the loss landscape gets explored.
-<!-- #endregion -->
 
-<!-- #region id="0s8UWJB-joV-" -->
+<!-- #region -->
 ## Opaque Mode
 
 Here, we'll demonstrate how to use opaque mode on the same setting.
@@ -280,13 +253,11 @@ params = optax.apply_updates(params, updates)
 ```
 <!-- #endregion -->
 
-<!-- #region id="EwXxXOFVkjou" -->
 Here's the opaque drop-in SAM optimizer again.
 
 
-<!-- #endregion -->
 
-```python id="UMvJqqxRjmIF"
+```python
 lr = 0.01
 rho = 0.1
 opt = optax.sgd(lr)
@@ -296,11 +267,9 @@ sam_opt = contrib.sam(opt, adv_opt, sync_period=2, opaque_mode=True)
 sgd_opt = optax.sgd(lr)  # Baseline SGD optimizer
 ```
 
-<!-- #region id="woThldyjjmIH" -->
 Here's an opaque momentum SAM optimizer.
-<!-- #endregion -->
 
-```python id="YcaxX4-4jmIH"
+```python
 def sam_mom(lr=1e-3, momentum=0.1, rho=0.1, sync_period=2):
   opt = optax.sgd(lr, momentum=momentum)
   adv_opt = optax.chain(contrib.normalize(), optax.sgd(rho))
@@ -311,11 +280,9 @@ sam_mom_opt = sam_mom(lr, momentum=mom)
 mom_opt = optax.sgd(lr, momentum=mom)
 ```
 
-<!-- #region id="0MXyU4WrjmIH" -->
 Here's an opaque Adam-based SAM optimizer.
-<!-- #endregion -->
 
-```python id="Fb8Cy5xgjmIJ"
+```python
 def sam_adam(lr=1e-3, b1=0.9, b2=0.999, rho=0.03, sync_period=5):
   """A SAM optimizer using Adam for the outer optimizer."""
   opt = optax.adam(lr, b1=b1, b2=b2)
@@ -326,7 +293,7 @@ sam_adam_opt = sam_adam(lr)
 adam_opt = optax.adam(lr)
 ```
 
-```python id="-z4NxcZujmIJ"
+```python
 params = np.array([-0.4, -0.4])
 
 class Store(NamedTuple):
@@ -342,7 +309,7 @@ sam_adam_store = Store(params=params, state=sam_adam_opt.init(params))
 adam_store = Store(params=params, state=adam_opt.init(params))
 ```
 
-```python id="bwLv3UTCjmIK"
+```python
 def make_step(opt):
   @jax.jit
   def step(store):
@@ -354,14 +321,14 @@ def make_step(opt):
     else:
       updates, state = opt.update(grads, store.state, store.params)
     params = optax.apply_updates(store.params, updates)
-    return store.replace(
+    return store._replace(
         params=params,
         state=state,
         step=store.step+1), value
   return step
 ```
 
-```python id="VRJiF7TWjmIK"
+```python
 sam_step = make_step(sam_opt)
 sgd_step = make_step(sgd_opt)
 
@@ -372,7 +339,7 @@ sam_adam_step = make_step(sam_adam_opt)
 adam_step = make_step(adam_opt)
 ```
 
-```python id="cwSnRxfQjmIK"
+```python
 sam_vals = []
 sam_params = []
 sgd_vals = []
@@ -389,7 +356,7 @@ adam_vals = []
 adam_params = []
 ```
 
-```python id="m20mYyBHjmIK"
+```python
 T = 4000
 for i in range(T):
   sam_store, sam_val = sam_step(sam_store)
@@ -414,7 +381,7 @@ for i in range(T):
   adam_params.append(adam_store.params)
 ```
 
-```python id="zlDP-42ajmIK"
+```python
 ts = np.arange(T)
 fig, axs = plt.subplots(6, figsize=(10, 12))
 axs[0].plot(ts, sgd_vals, label='SGD')
@@ -442,11 +409,9 @@ axs[5].plot(ts * 5, sam_adam_vals, label='5 * SAM Adam', lw=3)
 axs[5].legend();
 ```
 
-<!-- #region id="NLAJFJ-SjmIK" -->
 The behavior is identical to transparent mode, but the perceived number of gradient steps is half as many as in transparent mode (or 1/5 as many for SAM Adam).
-<!-- #endregion -->
 
-```python id="mY5FzqMLjmIK"
+```python
 fig, axs = plt.subplots(ncols=3, figsize=(8 * 3, 6))
 axs[0].plot(*np.array(sgd_params).T, label='SGD')
 axs[0].plot(*np.array(sam_params).T, label='SAM', zorder=100)
@@ -461,6 +426,4 @@ axs[2].plot(*np.array(sam_adam_params).T, label='SAM Adam')
 axs[2].legend(loc=4);
 ```
 
-<!-- #region id="P_MjRgofjmIK" -->
 The behavior is identical to transparent mode here as well, but we don't get to see the adversarial updates.
-<!-- #endregion -->

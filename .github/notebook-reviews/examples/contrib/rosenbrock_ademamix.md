@@ -1,17 +1,3 @@
----
-jupyter:
-  jupytext:
-    text_representation:
-      extension: .md
-      format_name: markdown
-      format_version: '1.3'
-      jupytext_version: 1.17.3
-  kernelspec:
-    display_name: optaxdev
-    language: python
-    name: python3
----
-
 # Recreate AdeMAMix Rosenbrock Plot from Paper
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.sandbox.google.com/github/google-deepmind/optax/blob/main/examples/contrib/rosenbrock_ademamix.ipynb)
@@ -89,7 +75,7 @@ for b1 in [0.9, 0.99, 0.999, 0.9999]:
     opt_state = solver.init(params)
 
     _, all_params = jax.lax.scan(
-        partial(_body_fn, solve=solver, b1=b1),
+        partial(_body_fn, solver=solver, b1=b1),
         (params, opt_state, 0),
         length=num_iterations
     )

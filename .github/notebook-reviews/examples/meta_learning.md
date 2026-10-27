@@ -1,24 +1,9 @@
----
-jupyter:
-  jupytext:
-    text_representation:
-      extension: .md
-      format_name: markdown
-      format_version: '1.3'
-      jupytext_version: 1.17.3
-  kernelspec:
-    display_name: Python 3
-    name: python3
----
-
-<!-- #region id="3tN0poN3zZ4L" -->
 # Meta-Learning
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.sandbox.google.com/github/google-deepmind/optax/blob/main/examples/meta_learning.ipynb)
 
-<!-- #endregion -->
 
-<!-- #region id="wGHOAQQNWSvl" -->
+
 Here we investigate using optax to meta-learn the learning rate of an optax optimizer. For a concrete example, we define a model where $y$ is linearly related to $x$, with some added noise,
 
 $$y = f(x) = 10 \cdot x + \mathcal{N}(0, 1).$$
@@ -37,9 +22,8 @@ bounded between 0 and 1, we parametrize the learning rate as a sigmoid
 over the meta parameter $\eta$.
 
 In the following snippets, we will solve the problem using optax. To begin with, we define a generator that samples from the hidden underlying distribution.
-<!-- #endregion -->
 
-```python id="Z6PrJuBOebo1"
+```python
 from typing import Iterator, Tuple
 import jax
 import jax.numpy as jnp
@@ -48,7 +32,7 @@ import numpy as np
 import optax
 ```
 
-```python id="NA3VjroNZjlo"
+```python
 def generator() -> Iterator[Tuple[jax.Array, jax.Array]]:
   rng = jax.random.PRNGKey(0)
 
@@ -59,11 +43,9 @@ def generator() -> Iterator[Tuple[jax.Array, jax.Array]]:
     yield x, y
 ```
 
-<!-- #region id="lUfPZ8FVfqc9" -->
 We demonstrate sampling from this as follows,
-<!-- #endregion -->
 
-```python id="tDpR8GFfftPD"
+```python
 g = generator()
 
 for _ in range(5):
@@ -71,24 +53,20 @@ for _ in range(5):
   print(f"Sampled y = {y:.3f}, x = {x:.3f}")
 ```
 
-<!-- #region id="J-L8Vyc9eFTy" -->
 We now define our parametrized function $f(\theta, x)$, and choose a random initial value for the parameter $\theta$.
-<!-- #endregion -->
 
-```python id="N8PNwdASeNZc"
+```python
 def f(theta: jax.typing.ArrayLike, x: jax.typing.ArrayLike) -> jax.typing.ArrayLike:
   return x * theta
 
 theta = jax.random.normal(jax.random.PRNGKey(42))
 ```
 
-<!-- #region id="wUldd3_2hObs" -->
 For the internal optimizer, which will fit $\theta$, we will use RMSProp. For the external optimizer, which we will use to fit the learning rate, we will use Adam. In optax, we must use `optax.inject_hyperparams` in order to allow the outer optimizer to modify the learning rate of the inner optimizer.
 
 The inner optimizer is initialized with a learning rate of 0.1, and the outer optimizer is initialized with a learning rate of 0.03.
-<!-- #endregion -->
 
-```python id="cWP2HN_KqQ6o"
+```python
 init_learning_rate = jnp.array(0.1)
 meta_learning_rate = jnp.array(0.03)
 
@@ -96,11 +74,9 @@ opt = optax.inject_hyperparams(optax.rmsprop)(learning_rate=init_learning_rate)
 meta_opt = optax.adam(learning_rate=meta_learning_rate)
 ```
 
-<!-- #region id="uFG9tczunv3H" -->
 In the following code, we implement a step of gradient descent using the computed loss.
-<!-- #endregion -->
 
-```python id="suvw4J9Rn9Ju"
+```python
 def loss(theta, x, y):
   return optax.l2_loss(y, f(theta, x))
 
@@ -112,15 +88,13 @@ def step(theta, state, x, y):
   return theta, state
 ```
 
-<!-- #region id="cTbJC8h1oGe6" -->
 For the meta-learning part of the problem, we will use the inner step to compute an _outer_ loss value, and an _outer_ step.
 
 These look very similar to the inner step, however, this outer step will inject the value of the learning rate hyperparameter into the state for the inner optimizer.
 
 We use `jax.jit` on the outer step of our computation, to use JAX to optimize our computation.
-<!-- #endregion -->
 
-```python id="2KojrF7FiJYD"
+```python
 def outer_loss(eta, theta, state, samples):
   state.hyperparams['learning_rate'] = jax.nn.sigmoid(eta)
 
@@ -143,11 +117,9 @@ def outer_step(eta, theta, meta_state, state, samples):
   return eta, theta, meta_state, state
 ```
 
-<!-- #region id="wr7oTKoxoVSE" -->
 In the following, we put all of the code above together in order to fit a value for $\theta$.
-<!-- #endregion -->
 
-```python id="N69sYlo_oUTZ"
+```python
 state = opt.init(theta)
 # inverse sigmoid, to match the value we initialized the inner optimizer with.
 eta = -np.log(1. / init_learning_rate - 1)
@@ -164,11 +136,9 @@ for i in range(2000):
   thetas.append(theta)
 ```
 
-<!-- #region id="lp0e2sS8pIqL" -->
 We can now plot the learning rates and values for $\theta$ that we computed during our optimization,
-<!-- #endregion -->
 
-```python id="Gp45HrNyJuW3"
+```python
 fig, (ax1, ax2) = plt.subplots(2);
 fig.suptitle('Meta-learning RMSProp\'s learning rate');
 plt.xlabel('Step');
@@ -184,6 +154,4 @@ ax2.label_outer();
 ax2.set(ylabel='Theta');
 ```
 
-<!-- #region id="tNvaCoeYpQRL" -->
 The profile of the learning rate over time seems fairly reasonable, it decays towards zero to help convergence.
-<!-- #endregion -->

@@ -1,26 +1,10 @@
----
-jupyter:
-  jupytext:
-    text_representation:
-      extension: .md
-      format_name: markdown
-      format_version: '1.3'
-      jupytext_version: 1.17.3
-  kernelspec:
-    display_name: Python 3 (ipykernel)
-    language: python
-    name: python3
----
-
-<!-- #region id="2To_0Q86toj4" -->
 # Optimistic Gradient Descent in a Bilinear Min-Max Problem
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.sandbox.google.com/github/google-deepmind/optax/blob/main/examples/ogda_example.ipynb)
 
 
-<!-- #endregion -->
 
-```python id="MMvXmgsvTmcl"
+```python
 import functools
 import jax
 import optax
@@ -28,7 +12,6 @@ import matplotlib.pyplot as plt
 from jax import lax, numpy as jnp
 ```
 
-<!-- #region id="VqpOVQIgTuJ0" -->
 Consider the following min-max problem:
 
 $$
@@ -63,9 +46,8 @@ y_{k+1} = y_k + (\alpha + \beta) \eta_k \nabla_y f(x_k, y_k) - \beta \eta_k \nab
 $$
 
 which recovers standard OGDA when $\alpha=\beta=1$. See [Mokhtari et al., 2019](https://arxiv.org/abs/1901.08511v2) for more details. 
-<!-- #endregion -->
 
-<!-- #region id="WxcGo14yWhWn" -->
+
 $$
 \pi^{k+1} = \pi^k - \tau_\pi^k \nabla_\pi \mathcal L(\pi^k, \mu^k) \\
 \mu^{k+1} = \mu^k + \tau_\mu^k \nabla_\mu \mathcal L(\pi^k_k, \mu^k),
@@ -85,7 +67,6 @@ $$
 
 We will now show an example.
 First, we define our function $f$:
-<!-- #endregion -->
 
 ```python
 def f(params):

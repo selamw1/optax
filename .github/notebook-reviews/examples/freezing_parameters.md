@@ -1,26 +1,10 @@
----
-jupyter:
-  jupytext:
-    text_representation:
-      extension: .md
-      format_name: markdown
-      format_version: '1.3'
-      jupytext_version: 1.17.3
-  kernelspec:
-    display_name: .venv
-    language: python
-    name: python3
----
-
-<!-- #region id="jOBWPQNih6Uj" -->
 # Freezing Parameters in Optax
 
 This guide demonstrates multiple methods to freeze (i.e. hold constant) subsets of your model's parameters during optimization with Optax. Optax provides ways to do this via `optax.transforms.freeze` and `optax.transforms.selective_transform`, and from-scratch methods using `optax.set_to_zero()`, `optax.masked`, `optax.partition`.
 
 Below, we first show the new recommended utilities, then provide the classic (from-scratch) approaches for reference.
-<!-- #endregion -->
 
-```python id="ebubCz96h6Ut"
+```python
 # Import libraries
 import jax
 import jax.numpy as jnp
@@ -32,25 +16,21 @@ freeze = transforms.freeze
 selective_transform = transforms.selective_transform
 ```
 
-<!-- #region id="-THd07sx5wTN" -->
 For all examples, our goal is to minimize the absolute sum of param0 and param1.
 So our loss function becomes:
-<!-- #endregion -->
 
-```python id="z3r3he_g5wTN"
+```python
 def loss_fn(p):
     return jnp.abs(p["param0"][0]) + jnp.abs(p["param1"][0])
 ```
 
-<!-- #region id="z9sGr1Sm5wTN" -->
 ### 1. Freezing with `optax.transforms.freeze`
 
 The new `optax.transforms.freeze` utility provides a simple way to freeze parameters using a mask. This is equivalent to the classic masked approach, but uses the new helper.
 
 > **Comment:** Uses `optax.chain(optax.adam, freeze(mask))` to freeze parameters marked `True` in the mask.
-<!-- #endregion -->
 
-```python id="UO6iNYEr5wTN"
+```python
 # Initialize parameters and mask
 params = {
     "param0": jnp.array([10.0]),  # will be trained
@@ -95,7 +75,7 @@ assert jnp.isclose(params["param1"][0], 10.0)
 print("✅ param1 stayed at 10.0; param0 was optimized toward zero.")
 ```
 
-```python id="ngiSD34J5wTO"
+```python
 # Plot loss vs. steps
 plt.figure(figsize=(10, 5))
 plt.plot(loss_history)
@@ -115,15 +95,13 @@ plt.legend()
 plt.show()
 ```
 
-<!-- #region id="dgsXszRe5wTO" -->
 ### 2. Freezing with `optax.transforms.selective_transform`
 
 The new `optax.transforms.selective_transform` utility lets you apply an optimizer only to unfrozen parameters, using a mask. This is a more concise and robust way to freeze parameters than using `partition` directly.
 
 > **Comment:** Uses `selective_transform(optax.adam, mask)` to freeze parameters marked `True` in the mask.
-<!-- #endregion -->
 
-```python id="WJ7sTeTD5wTO"
+```python
 # Initialize parameters and mask
 params = {
     "param0": jnp.array([10.0]),  # will be trained
@@ -168,7 +146,7 @@ assert jnp.isclose(params["param1"][0], 10.0)
 print("✅ param1 stayed at 10.0; param0 was optimized toward zero.")
 ```
 
-```python id="Erxv7cuz5wTO"
+```python
 # Plot loss vs. steps
 plt.figure(figsize=(10, 5))
 plt.plot(loss_history)
@@ -188,15 +166,13 @@ plt.legend()
 plt.show()
 ```
 
-<!-- #region id="lw2xe5Ch5wTP" -->
 ### 3. Dynamic Freezing/Unfreezing with `selective_transform`
 
 You can dynamically swap which parameters are frozen by re-creating the optimizer with a new mask. This example starts with `param0` trainable and `param1` frozen, then swaps at step 200.
 
 > **Comment:** Demonstrates dynamic freezing/unfreezing by changing the mask and re-initializing the optimizer.
-<!-- #endregion -->
 
-```python id="jjJCgnZm5wTP"
+```python
 # Initialize parameters and mask
 params = {"param0": jnp.array([10.0]), "param1": jnp.array([10.0])}
 mask = {"param0": False, "param1": True}
@@ -240,7 +216,7 @@ assert params["param1"][0] != 10.0
 print("✅ Dynamic swap worked param0: train→frozen, param1: frozen→train")
 ```
 
-```python id="u3fAyjf35wTP"
+```python
 # Plot loss vs. steps
 plt.figure(figsize=(10, 5))
 plt.plot(loss_history)
@@ -260,21 +236,18 @@ plt.legend()
 plt.show()
 ```
 
-<!-- #region id="lBfsm7Fn5wTQ" -->
 # From-scratch Implementation
 
 The following sections show the classic approaches for freezing parameters in Optax, for reference.
-<!-- #endregion -->
 
-<!-- #region id="9D3X71HPh6Uy" -->
+
 ### 1. Simple Masked Freezing (True = freeze, False = train)
 
 Use `optax.masked` together with `optax.set_to_zero()` to prevent updates to any parameters marked `True` in the mask. In the snippet below, we freeze `param1` (mask=True) and train `param0` (mask=False) using Adam.
 
 > **Comment:** Uses `optax.chain(optax.adam, optax.masked(optax.set_to_zero(), mask))` to freeze parameters.
-<!-- #endregion -->
 
-```python colab={"base_uri": "https://localhost:8080/"} id="nan1lcKPh6U0" outputId="18d71b3c-cb4e-4f14-80dd-77c6325b3495"
+```python
 # Define two scalar “parameters”
 params = {
     "param0": jnp.array([10.0]),  # will be trained
@@ -323,7 +296,7 @@ print("✅ param1 stayed at 10.0; param0 was optimized toward zero.")
 
 ```
 
-```python colab={"base_uri": "https://localhost:8080/", "height": 957} id="YIESOAuZyHFS" outputId="1dc9fc56-a70f-43f8-e461-0d76e1c26f82"
+```python
 # Plot loss vs. steps
 plt.figure(figsize=(10, 5))
 plt.plot(loss_history)
@@ -343,15 +316,13 @@ plt.legend()
 plt.show()
 ```
 
-<!-- #region id="LpKMN__Rh6U1" -->
 ### 2. Freezing with `optax.partition`
 
 Use `optax.partition` to assign different update rules to each parameter. In this example, we apply Adam to `param0` and completely freeze `param1` by sending it through `optax.set_to_zero()`.
 
 > **Comment:** Uses `optax.partition` to assign Adam or zero update to each parameter.
-<!-- #endregion -->
 
-```python colab={"base_uri": "https://localhost:8080/"} id="5p60eSi9h6U2" outputId="977221f7-a141-4d3b-cb66-6ffd3985eceb"
+```python
 # Create two scalar “parameters”
 params = {
     "param0": jnp.array([10.0]),  # will be trained
@@ -400,7 +371,7 @@ assert jnp.isclose(params["param1"][0], 10.0), "param1 should remain unchanged"
 print("✅ partition correctly froze param1!")
 ```
 
-```python colab={"base_uri": "https://localhost:8080/", "height": 957} id="lERjlpd5ydGB" outputId="c989bbeb-24ef-4766-8e7a-17892e2643d5"
+```python
 """This plot will be about the same as the first one"""
 # Plot loss vs. steps
 plt.figure(figsize=(10, 5))
@@ -421,15 +392,13 @@ plt.legend()
 plt.show()
 ```
 
-<!-- #region id="Lcv3meCFh6U3" -->
 ### 3. Dynamic Freeze Scheduling with `optax.partition`
 
 In this example, we start by training `param0` (using Adam) and freezing `param1` (using `set_to_zero`). At step 200, we swap the roles—freezing `param0` and training `param1`—to demonstrate how you can dynamically change which parameters are updated during training.
 
 > **Comment:** Demonstrates dynamic freezing/unfreezing by changing the label map and re-initializing the optimizer.
-<!-- #endregion -->
 
-```python colab={"base_uri": "https://localhost:8080/"} id="mOAp-nvJh6U4" outputId="9f3d5133-708e-4549-a3e5-93b23c6a9881"
+```python
 # Two scalar “params”
 params = {
     "param0": jnp.array([10.0]),  # will start trainable
@@ -484,7 +453,7 @@ print("✅ Dynamic swap worked param0: train→frozen, param1: frozen→train")
 
 ```
 
-```python colab={"base_uri": "https://localhost:8080/", "height": 957} id="4gvnM2s6zKJd" outputId="cb70a475-ebc8-4dc5-c901-ac51eb9cef10"
+```python
 # Plot loss vs. steps
 plt.figure(figsize=(10, 5))
 plt.plot(loss_history)

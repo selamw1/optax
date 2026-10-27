@@ -1,27 +1,14 @@
----
-jupyter:
-  jupytext:
-    text_representation:
-      extension: .md
-      format_name: markdown
-      format_version: '1.3'
-      jupytext_version: 1.17.3
-  kernelspec:
-    display_name: Python 3
-    name: python3
----
-
-<!-- #region id="uJHywE_oL3j2" -->
+<!-- #region -->
 # Differentially private convolutional neural network on MNIST.
 
-[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.sandbox.google.com/github/google-deepmind/optax/blob/main/examples/differentially_private_sgd.ipynb)
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.sandbox.google.com/github/google-deepmind/optax/blob/main/examples/contrib/differentially_private_sgd.ipynb)
 
 A large portion of this code is forked from the differentially private SGD
 example in the [JAX repo](
 https://github.com/jax-ml/jax/blob/main/examples/differentially_private_sgd.py).
 
 To run the colab locally you need install the
-`dp-accounting`, `tensorflow`, `tensorflow-datasets`, packages via `pip`.
+`dp-accounting`, `grain`, `tensorflow-datasets`, packages via `pip`.
 
 
 [Differentially Private Stochastic Gradient Descent](https://arxiv.org/abs/1607.00133) requires clipping the per-example parameter
@@ -31,7 +18,7 @@ minibatch-vectorized computation for convolutional architectures. Train time
 takes a few seconds per epoch on a commodity GPU.
 <!-- #endregion -->
 
-```python id="VaYIiCnjL3j3"
+```python
 import warnings
 import dp_accounting
 import jax
@@ -40,7 +27,7 @@ from optax import contrib
 from optax import losses
 import optax
 from jax.example_libraries import stax
-import tensorflow as tf
+import grain
 import tensorflow_datasets as tfds
 import matplotlib.pyplot as plt
 
@@ -48,7 +35,7 @@ import matplotlib.pyplot as plt
 print("JAX running on", jax.devices()[0].platform.upper())
 ```
 
-<!-- #region id="t7Dn8L_Uw0Yb" -->
+<!-- #region -->
 This table contains hyperparameters and the corresponding expected test accuracy.
 
 
@@ -60,7 +47,7 @@ This table contains hyperparameters and the corresponding expected test accuracy
 | True   | 0.25          | 0.7              | 1.5          | 256        | 45         | 1e-5  | ~97%                |
 <!-- #endregion -->
 
-```python id="jve2h810L3j3"
+```python
 # Whether to use DP-SGD or vanilla SGD:
 DPSGD = True
 # Learning rate for the optimizer:
@@ -77,28 +64,29 @@ NUM_EPOCHS = 15
 DELTA = 1e-5
 ```
 
-<!-- #region id="iLGeV4y4DBkL" -->
 CIFAR10 and CIFAR100 are composed of 32x32 images with 3 channels (RGB). We'll now load the dataset using `tensorflow_datasets` and display a few of the first samples.
-<!-- #endregion -->
 
-```python id="zynvtk4wDBkL"
-(train_loader, test_loader), info = tfds.load(
-    "mnist", split=["train", "test"], as_supervised=True, with_info=True
+```python
+train_source, test_source = tfds.data_source("mnist", split=["train", "test"])
+train_loader = grain.MapDataset.source(train_source)
+test_loader = grain.MapDataset.source(test_source)
+
+train_loader_batched = (
+    train_loader
+    .shuffle(seed=45)
+    .map(lambda x: (x["image"] / 255., x["label"]))
+    .batch(BATCH_SIZE, drop_remainder=True)
 )
 
-min_max_rgb = lambda image, label: (tf.cast(image, tf.float32) / 255., label)
-train_loader = train_loader.map(min_max_rgb)
-test_loader = test_loader.map(min_max_rgb)
-
-train_loader_batched = train_loader.shuffle(
-    buffer_size=10_000, reshuffle_each_iteration=True
-).batch(BATCH_SIZE, drop_remainder=True)
-
-NUM_EXAMPLES = info.splits["test"].num_examples
-test_batch = next(test_loader.batch(NUM_EXAMPLES, drop_remainder=True).as_numpy_iterator())
+NUM_EXAMPLES = len(test_loader)
+test_loader_batched = (
+    test_loader
+    .map(lambda x: (x["image"] / 255., x["label"]))
+    .batch(BATCH_SIZE, drop_remainder=True)
+)
 ```
 
-```python id="o6In7oQ-0EhG"
+```python
 init_random_params, predict = stax.serial(
     stax.Conv(16, (8, 8), padding="SAME", strides=(2, 2)),
     stax.Relu,
@@ -113,11 +101,9 @@ init_random_params, predict = stax.serial(
 )
 ```
 
-<!-- #region id="j2OUgc6J0Jsl" -->
 This function computes the privacy parameter epsilon for the given number of steps and probability of information leakage `DELTA`.
-<!-- #endregion -->
 
-```python id="43177TofzuOa"
+```python
 def compute_epsilon(steps):
   if NUM_EXAMPLES * DELTA > 1.:
     warnings.warn("Your delta might be too high.")
@@ -129,7 +115,7 @@ def compute_epsilon(steps):
   return accountant.get_epsilon(DELTA)
 ```
 
-```python id="W9mPtPvB0D3X"
+```python
 @jax.jit
 def loss_fn(params, batch):
   images, labels = batch
@@ -146,7 +132,7 @@ def test_step(params, batch):
   return loss, accuracy * 100
 ```
 
-```python id="vOet-_860ysL"
+```python
 if DPSGD:
   tx = contrib.dpsgd(
       learning_rate=LEARNING_RATE, l2_norm_clip=L2_NORM_CLIP,
@@ -158,7 +144,7 @@ _, params = init_random_params(jax.random.PRNGKey(1337), (-1, 28, 28, 1))
 opt_state = tx.init(params)
 ```
 
-```python id="b-NmP7g01EdA"
+```python
 @jax.jit
 def train_step(params, opt_state, batch):
   grad_fn = jax.grad(loss_fn, has_aux=True)
@@ -174,15 +160,20 @@ def train_step(params, opt_state, batch):
   return new_params, new_opt_state
 ```
 
-```python id="QMl9dnbJ1OtQ"
+```python
 accuracy, loss, epsilon = [], [], []
 
 for epoch in range(NUM_EPOCHS):
-  for batch in train_loader_batched.as_numpy_iterator():
+  for batch in train_loader_batched:
     params, opt_state = train_step(params, opt_state, batch)
 
   # Evaluates test accuracy.
-  test_loss, test_acc = test_step(params, test_batch)
+  test_acc = 0
+  test_loss = 0
+  for test_batch in test_loader_batched:
+    test_batch_loss, test_batch_acc = test_step(params, test_batch)
+    test_acc += test_batch_acc / len(test_loader_batched)
+    test_loss += test_batch_loss
   accuracy.append(test_acc)
   loss.append(test_loss)
   print(f"Epoch {epoch + 1}/{NUM_EPOCHS}, test accuracy: {test_acc}")
@@ -194,7 +185,7 @@ for epoch in range(NUM_EPOCHS):
     epsilon.append(eps)
 ```
 
-```python id="9nsV-9_b2qca"
+```python
 if DPSGD:
   _, axs = plt.subplots(ncols=3, figsize=(9, 3))
 else:
@@ -212,6 +203,6 @@ if DPSGD:
 plt.tight_layout()
 ```
 
-```python id="1ubOEWod3OPj"
+```python
 print(f'Final accuracy: {accuracy[-1]}')
 ```

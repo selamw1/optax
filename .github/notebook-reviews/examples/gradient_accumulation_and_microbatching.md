@@ -1,20 +1,8 @@
----
-jupyter:
-  jupytext:
-    text_representation:
-      extension: .md
-      format_name: markdown
-      format_version: '1.3'
-      jupytext_version: 1.17.3
----
-
-<!-- #region id="-2Bmeh2sl_fp" -->
 # Summary
 
 The purpose of this notebook is to demonstrate example usages of utilities defined by the optax microbatching API.  microbatching is a general purpose function transformation that lifts a function that operates over a batch to one that operates over a potentially much larger batch, by splitting up the work into smaller chunks and accumulating the results.  Like other jax transformations, it's designed to be quite general - any function that can normally be traced by other jax transformations should work here. This notebook is broken up into multiple sections to illustrate usages of different functions in the API.
-<!-- #endregion -->
 
-```python id="5LUEGvWml-mH"
+```python
 # ! pip install -q "optax @ git+https://github.com/google-deepmind/optax"
 import jax
 import jax.numpy as jnp
@@ -26,14 +14,12 @@ from optax import microbatching
 import gc
 ```
 
-<!-- #region id="T5Ie-_tfqgAV" -->
 # Setup
 
 Here we define a minimal transformer architecture, along with some dummy data to call it with. This notebook is primarily concerned with demonsrating the APIs
 and looking at throughput numbers (examples processed / second), rather than training a model on real data. This notebook is intended to run on a Google Colab Instance with T4 GPU type.  If you run on different hardware, you may need to scale down the model size via the configuration below.
-<!-- #endregion -->
 
-```python id="nInGNjjeqcvU"
+```python
 class TransformerBlock(nnx.Module):
   def __init__(self, hidden_size: int, num_heads: int, *, rngs: nnx.Rngs):
     self.norm1 = nnx.LayerNorm(hidden_size, rngs=rngs)
@@ -67,7 +53,7 @@ class Transformer(nnx.Module, pytree=False):
     return logits
 ```
 
-```python id="QEcf3p7fqoJ0"
+```python
 hidden_size = 512
 num_heads = 8
 num_layers = 12
@@ -88,7 +74,7 @@ adamw = optax.adamw(0.01)
 opt_state = adamw.init(params)
 ```
 
-```python id="iR9qzYp6qjDS"
+```python
 def loss_fn(params, batch):
   model = nnx.merge(graphdef, params)
   logits = model(batch)
@@ -107,13 +93,11 @@ def update_fn(params, opt_state, batch):
 update_fn.lower(params, opt_state, batch).compile()
 ```
 
-<!-- #region id="KlRFCRc5nHLP" -->
 # Part 1: Microbatching for Gradient Accumulation
 
 This section compares three methdos for performing gradient accumulation in jax/optax, one of which is through the microbatching API.
-<!-- #endregion -->
 
-<!-- #region id="COxGVTPUq9bZ" -->
+
 ### Option 1: Manual Gradient Accumulation
 
 64 is the largest batch size we can use with this combination of model, sequence length, and hardware.  To use larger batch sizes we have multiple options.  The first we will explore is manual, bypassing any optax abstractions.  
@@ -121,9 +105,8 @@ This section compares three methdos for performing gradient accumulation in jax/
 Specifically, we will write two functions:
 1) One that computes gradients and adds them to an accumulator.
 2) One that takes accumulated gradients, performs the optimizer step, and resets the accumulated gradients back to zero.
-<!-- #endregion -->
 
-```python id="SEf4ohj-q56F"
+```python
 @functools.partial(jax.jit, donate_argnums=(2,))
 def add_gradient(params, batch, accumulated_gradients):
   grad = jax.grad(loss_fn)(params, batch)
@@ -141,7 +124,7 @@ add_gradient.lower(params, batch, accumulated_gradients).compile()
 update_params.lower(params, opt_state, accumulated_gradients).compile()
 ```
 
-```python id="FjIvz_kRrAXH"
+```python
 start_time = time.perf_counter()
 for i in range(accumulation_steps):
   accumulated_gradients = add_gradient(params, batch, accumulated_gradients)
@@ -153,13 +136,11 @@ end_time = time.perf_counter()
 print('Total Time', end_time - start_time)
 ```
 
-<!-- #region id="gPfNKr5RrHmq" -->
 ### Option 2: optax.MultiSteps
 
 By wrapping our optimizer with optax.MultiSteps, we can have optax handle the gradient accumulation for us.  Now we only have to define and compile a single update_fn, which is slightly simpler. The opt_state now keeps track of the accumulated gradients for us. This is more convenient as we have only a single jitted function now.
-<!-- #endregion -->
 
-```python id="vTMm84VyrDZV"
+```python
 multi_adam = optax.MultiSteps(adamw, accumulation_steps)
 
 @functools.partial(jax.jit, donate_argnums=(0, 2))
@@ -173,7 +154,7 @@ multi_opt_state = multi_adam.init(params)
 update_fn_v2.lower(params, batch, multi_opt_state).compile()
 ```
 
-```python id="qi-zg9-5rGsg"
+```python
 start_time = time.perf_counter()
 for i in range(accumulation_steps):
   params, multi_opt_state = update_fn_v2(params, batch, multi_opt_state)
@@ -183,17 +164,14 @@ end_time = time.perf_counter()
 print('Total Time', end_time - start_time)
 ```
 
-<!-- #region id="SBGm3wY5rUIH" -->
 ### Option 3: `microbatching.microbatch`
 
 microbatching differs from the approach above in that it transfers the entire batch of data to device memory, then splits it up perfoming the forward-backward pass on smaller batches and accumulating them using jax.lax.scan. Like Option 2 above, the full train step can be written as a single jitted function, however now the train step is doing 16X as much work.
-<!-- #endregion -->
 
-<!-- #region id="I5HrKPuVrQiA" -->
 
-<!-- #endregion -->
 
-```python id="aBatfdC7rO--"
+
+```python
 @functools.partial(jax.jit, donate_argnums=(0, 2))
 def update_fn_v3(params, batch, opt_state):
   grads = microbatching.microbatch(
@@ -209,20 +187,18 @@ full_batch = jnp.vstack([batch]*accumulation_steps)
 update_fn_v3.lower(params, full_batch, opt_state).compile()
 ```
 
-```python id="JKxDiYD9rXMF"
+```python
 start_time = time.perf_counter()
 params, opt_state = jax.block_until_ready(update_fn_v3(params, full_batch, opt_state))
 end_time = time.perf_counter()
 print('Total Time', end_time - start_time)
 ```
 
-<!-- #region id="MZ2Xwu9znYYl" -->
 # Part 2: `microbatching.micro_vmap`
 
 micro_vmap combines microbatching with jax.vmap, providing a new transformation with a similar API as jax.vmap, but that works with much larger batches than jax.vmap. It is especially useful when the function being vmapped requries more memory than that of the inputs/outputs for intermediates, or if you want to aggregate across the vmapped dimension.
-<!-- #endregion -->
 
-```python id="fd4XmvYjnoh3"
+```python
 def expensive_function(x):
   return jax.nn.softmax(jnp.sin(jnp.outer(x, x))).sum(axis=0)
 
@@ -238,7 +214,7 @@ print('Processed small batch', result.shape)
 print(result)
 ```
 
-```python id="nFGg2x5erilE"
+```python
 result = microbatching.micro_vmap(expensive_function, microbatch_size=32)(X)
 result = jax.block_until_ready(result)
 gc.collect()
@@ -246,13 +222,11 @@ print('Processed Full Batch', result.shape)
 print(result)
 ```
 
-<!-- #region id="PWuT3BU1xJ2S" -->
 # Part 3: `microbatching.micro_grad`
 
 micro_grad provides a simple and performant way to compute a sum or average of transformed per-example grads. While normally computing per-example gradients with jax is more expensive than computing normal gradients, and fail to run for the same batch sizes, the microbatching provides a sound mechanism to bypass this issue that we surface through the convenient and familiar API. Below we use the API to collect metrics about the per-example gradients, which can be useful for understanding and debugging the behavior of training runs.
-<!-- #endregion -->
 
-```python id="3hPNgICJuskf"
+```python
 def metrics_fn(per_example_grad):
   leaf_norms = jax.tree.map(jnp.linalg.norm, per_example_grad)
   return leaf_norms
@@ -262,12 +236,10 @@ grad_fn = microbatching.micro_grad(loss_fn, metrics_fn=metrics_fn, microbatch_si
 grad, aux = jax.jit(grad_fn)(params, batch)
 ```
 
-```python id="ph9T_WAWykls"
+```python
 # This shows the norm for the gradient of the embedding layer per example.
 # High uniformity of the norm values is encouraging.
-aux.metrics['embedding']['embedding'].get_value()
+aux.metrics['embedding']['embedding'].value
 ```
 
-<!-- #region id="XaMThtUpnakg" -->
 
-<!-- #endregion -->

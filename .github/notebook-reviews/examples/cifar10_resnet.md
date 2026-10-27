@@ -1,70 +1,35 @@
----
-jupytext:
-  formats: ipynb,md:myst
-  text_representation:
-    extension: .md
-    format_name: myst
-    format_version: 0.13
-    jupytext_version: 1.17.3
-kernelspec:
-  display_name: Python 3
-  name: python3
----
-
-+++ {"id": "uJHywE_oL3j2"}
-
-# ResNet on CIFAR10 with Flax and Optax.
+# ResNet on CIFAR10 with Flax NNX and Optax.
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.sandbox.google.com/github/google-deepmind/optax/blob/main/examples/cifar10_resnet.ipynb)
 
-This notebook trains a residual network (ResNet) with optax on CIFAR10 or CIFAR100.
+This notebook trains a residual network (ResNet) with **Flax NNX** and **Optax** on CIFAR10.
 
-To run the colab locally you need install the
-`tensorflow`, `tensorflow-datasets` packages via `pip`.
+It demonstrates:
+1. Loading data via `tensorflow_datasets`.
+2. Data augmentation using `albumentations`.
+3. Defining a ResNet model using the `flax.nnx`.
+4. Computing loss and regularization using `optax`.
+5. Training with `nnx.Optimizer`.
 
 ```{code-cell} ipython3
----
-colab:
-  base_uri: https://localhost:8080/
-executionInfo:
-  elapsed: 10233
-  status: ok
-  timestamp: 1701459080832
-  user:
-    displayName: Masha Samsikova
-    userId: '12506121178718715127'
-  user_tz: 0
-id: VaYIiCnjL3j3
-outputId: 1d3a996a-de0a-4644-d1e2-c55b38b7af51
----
 import functools
-from collections.abc import Callable
-from typing import Any, Sequence, Tuple, Optional, Dict
-
-from flax import linen as nn
-
-import jax
-import jax.numpy as jnp
-
-from matplotlib import pyplot as plt
-import numpy as np
-
-import optax
-import tensorflow as tf
-import tensorflow_datasets as tfds
+from typing import Any, Callable, Dict, Sequence, Tuple, Optional
 from functools import partial
 
-# hide the GPU from tensorflow, otherwise it might
-# reserve memory on it
-tf.config.experimental.set_visible_devices([], "GPU")
+from flax import nnx
+import jax
+import jax.numpy as jnp
+import numpy as np
+import optax
+import tensorflow_datasets as tfds
+import albumentations as A
+from matplotlib import pyplot as plt
 
 # Show on which platform JAX is running.
 print("JAX running on", jax.devices()[0].platform.upper())
 ```
 
 ```{code-cell} ipython3
-:id: jve2h810L3j3
-
 # @markdown Total number of epochs to train for:
 MAX_EPOCHS = 50  # @param{type:"integer"}
 # @markdown Number of samples in each batch:
@@ -79,32 +44,22 @@ DATASET = "cifar10"  # @param{type:"string"}
 L2_REG = 1e-4  # @param{type:"number"}
 ```
 
-+++ {"id": "iLGeV4y4DBkL"}
-
+## Data Loading
 CIFAR10 and CIFAR100 are composed of 32x32 images with 3 channels (RGB). We'll now load the dataset using `tensorflow_datasets` and display a few of the first samples.
 
 ```{code-cell} ipython3
----
-colab:
-  base_uri: https://localhost:8080/
-  height: 488
-executionInfo:
-  elapsed: 60564
-  status: ok
-  timestamp: 1701459141394
-  user:
-    displayName: Masha Samsikova
-    userId: '12506121178718715127'
-  user_tz: 0
-id: zynvtk4wDBkL
-outputId: 3aad151e-127f-4cc9-9965-5b445d90e6d0
----
-(train_loader, test_loader), info = tfds.load(
+(train_ds_raw, test_ds_raw), info = tfds.load(
     DATASET, split=["train", "test"], as_supervised=True, with_info=True
 )
+
+# Convert to list of dictionaries for easy access
+train_data_list = list(tfds.as_numpy(train_ds_raw))
+test_data_list = list(tfds.as_numpy(test_ds_raw))
+
+print(f"Loaded {len(train_data_list)} training images and {len(test_data_list)} test images.")
+
 NUM_CLASSES = info.features["label"].num_classes
 IMG_SIZE = info.features["image"].shape
-
 
 def plot_sample_images(loader):
   loader_iter = iter(loader)
@@ -118,180 +73,216 @@ def plot_sample_images(loader):
           info.features["label"].names[label], fontsize=10, y=0.9
       )
 
-
-plot_sample_images(train_loader)
+plot_sample_images(train_ds_raw)
 ```
 
-+++ {"id": "XlSCdO8yDBkM"}
+## Data Augmentation
+The accuracy of the model can be improved significantly through data augmentation. We use `albumentations` to apply random padding, cropping, horizontal flips, and normalization.
 
-The accuracy of the model can be improved significantly through data augmentation. That is, instead of training on the above images, we'll generate random modifications of the images and train on those. This is done by using the `transform` argument of `tfds.load` to apply a random crop, random horizontal flip, and random color jittering.
-
-In the next cell we apply these transformations on the above images.
+In the next cell we define these transformations and a custom generator to yield batches.
 
 ```{code-cell} ipython3
----
-colab:
-  base_uri: https://localhost:8080/
-  height: 357
-executionInfo:
-  elapsed: 1072
-  status: ok
-  timestamp: 1701459142465
-  user:
-    displayName: Masha Samsikova
-    userId: '12506121178718715127'
-  user_tz: 0
-id: dVkDlShoDBkM
-outputId: 8595c20c-e476-4851-d78f-d07a4cc7c3fc
----
-def augment(image, label):
-  """Performs data augmentation."""
-  image = tf.image.resize_with_crop_or_pad(image, 40, 40)
-  image = tf.image.random_crop(image, [32, 32, 3])
-  image = tf.image.random_flip_left_right(image)
-  image = tf.image.random_brightness(image, max_delta=0.2)
-  image = tf.image.random_contrast(image, 0.8, 1.2)
-  image = tf.image.random_saturation(image, 0.8, 1.2)
-  return image, label
+CIFAR10_MEAN = (0.4914, 0.4822, 0.4465)
+CIFAR10_STD = (0.2023, 0.1994, 0.2010)
 
+train_transforms = A.Compose([
+    A.PadIfNeeded(min_height=40, min_width=40, p=1.0),
+    A.RandomCrop(width=32, height=32, p=1.0),
+    A.HorizontalFlip(p=0.5),
+    A.Normalize(mean=CIFAR10_MEAN, std=CIFAR10_STD),
+])
 
-train_loader_augmented = train_loader.map(augment)
-plot_sample_images(train_loader_augmented)
+val_transforms = A.Compose([
+    A.Normalize(mean=CIFAR10_MEAN, std=CIFAR10_STD),
+])
+
+# Batch Generator
+def get_batch_generator(dataset_list, transforms, batch_size, shuffle=True):
+    indices = np.arange(len(dataset_list))
+
+    def generator():
+        if shuffle:
+            np.random.shuffle(indices)
+
+        for i in range(0, len(dataset_list), batch_size):
+            batch_indices = indices[i : i + batch_size]
+
+            # Drop remainder if batch is too small (training only generally)
+            if len(batch_indices) < batch_size and shuffle:
+                continue
+
+            batch_images = []
+            batch_labels = []
+
+            for idx in batch_indices:
+                sample = dataset_list[idx]
+                # Apply augmentation
+                aug_img = transforms(image=sample[0])['image']
+                batch_images.append(aug_img)
+                batch_labels.append(sample[1])
+
+            yield {
+                'image': np.array(batch_images),
+                'label': np.array(batch_labels)
+            }
+
+    return generator
 ```
 
-+++ {"id": "ITnYDuiIDBkM"}
-
-We now shuffle the data in the train set and create batches of size `'BATCH_SIZE'` for both train and test set
+Displaying augmented sample images (restored from normalization).
 
 ```{code-cell} ipython3
-:id: TSjMCbukDBkN
+TEMP_BATCH_SIZE = 20
+augmented_generator_func = get_batch_generator(train_data_list, train_transforms, TEMP_BATCH_SIZE, shuffle=False)
+augmented_batch = next(augmented_generator_func())
 
-train_loader_batched = train_loader_augmented.shuffle(
-    buffer_size=10_000, reshuffle_each_iteration=True
-).batch(BATCH_SIZE, drop_remainder=True)
+# image = (image * std) + mean
+mean = np.array(CIFAR10_MEAN)
+std = np.array(CIFAR10_STD)
+images_restored = augmented_batch['image'] * std + mean
+images_restored = np.clip(images_restored, 0, 1)
 
-test_loader_batched = test_loader.batch(BATCH_SIZE, drop_remainder=True)
+augmented_images_labels = [
+    (images_restored[i], augmented_batch['label'][i])
+    for i in range(len(images_restored))
+]
+
+plot_sample_images(augmented_images_labels)
 ```
 
-+++ {"id": "CrSSsvpUDBkN"}
-
-Now that the data is ready, let's define the model. We will be implementing ResNet from scratch using Flax. More examples on how to use Flax can be found [here](https://github.com/google/flax/tree/main/examples).
+We now instantiate generators that will be used during the training loop.
 
 ```{code-cell} ipython3
-:id: PNKfhWNrnLSP
+train_loader_fn = get_batch_generator(train_data_list, train_transforms, BATCH_SIZE, shuffle=True)
+test_loader_fn = get_batch_generator(test_data_list, val_transforms, BATCH_SIZE, shuffle=False)
+```
 
-ModuleDef = Any
+## Model Definition using Flax NNX
+We implement the ResNet architecture inheriting from `nnx.Module`.
 
+Since **Flax NNX** modules are Python objects that hold their own state (parameters and batch norm statistics), we handle the `train` boolean flag to switch between updating Batch Norm statistics (during training) or using the running average (during inference).
 
-class ResNetBlock(nn.Module):
+```{code-cell} ipython3
+class ResNetBlock(nnx.Module):
   """ResNet block."""
-
-  filters: int
-  conv: ModuleDef
-  norm: ModuleDef
-  act: Callable
-  strides: Tuple[int, int] = (1, 1)
-
-  @nn.compact
-  def __call__(
+  def __init__(
       self,
-      x,
+      in_features: int,
+      filters: int,
+      stride: int = 1,
+      rngs: nnx.Rngs = None
   ):
+    self.conv1 = nnx.Conv(in_features, filters, kernel_size=(3, 3), strides=stride, use_bias=False, rngs=rngs)
+    self.bn1 = nnx.BatchNorm(filters, momentum=0.9, epsilon=1e-5, rngs=rngs)
+    self.conv2 = nnx.Conv(filters, filters, kernel_size=(3, 3), use_bias=False, rngs=rngs)
+    self.bn2 = nnx.BatchNorm(filters, momentum=0.9, epsilon=1e-5, rngs=rngs)
+
+    self.proj = None
+    if stride != 1 or in_features != filters:
+        self.proj = nnx.Sequential(
+            nnx.Conv(in_features, filters, kernel_size=(1, 1), strides=stride, use_bias=False, rngs=rngs),
+            nnx.BatchNorm(filters, momentum=0.9, epsilon=1e-5, rngs=rngs)
+        )
+
+  def __call__(self, x, train: bool):
     residual = x
-    y = self.conv(self.filters, (3, 3), self.strides)(x)
-    y = self.norm()(y)
-    y = self.act(y)
-    y = self.conv(self.filters, (3, 3))(y)
-    y = self.norm(scale_init=nn.initializers.zeros_init())(y)
+    y = self.conv1(x)
+    y = self.bn1(y, use_running_average=not train)
+    y = nnx.relu(y)
+    y = self.conv2(y)
+    y = self.bn2(y, use_running_average=not train)
 
-    if residual.shape != y.shape:
-      residual = self.conv(self.filters, (1, 1), self.strides, name="conv_proj")(
-          residual
-      )
-      residual = self.norm(name="norm_proj")(residual)
+    if self.proj is not None:
+        residual = self.proj.layers[0](residual)
+        residual = self.proj.layers[1](residual, use_running_average=not train)
 
-    return self.act(residual + y)
+    return nnx.relu(residual + y)
 
 
-class BottleneckResNetBlock(nn.Module):
+class BottleneckResNetBlock(nnx.Module):
   """Bottleneck ResNet block."""
+  def __init__(
+      self,
+      in_features: int,
+      filters: int,
+      stride: int = 1,
+      rngs: nnx.Rngs = None
+  ):
+    self.conv1 = nnx.Conv(in_features, filters, kernel_size=(1, 1), use_bias=False, rngs=rngs)
+    self.bn1 = nnx.BatchNorm(filters, momentum=0.9, epsilon=1e-5, rngs=rngs)
+    self.conv2 = nnx.Conv(filters, filters, kernel_size=(3, 3), strides=stride, use_bias=False, rngs=rngs)
+    self.bn2 = nnx.BatchNorm(filters, momentum=0.9, epsilon=1e-5, rngs=rngs)
+    self.conv3 = nnx.Conv(filters, filters * 4, kernel_size=(1, 1), use_bias=False, rngs=rngs)
+    self.bn3 = nnx.BatchNorm(filters * 4, momentum=0.9, epsilon=1e-5, rngs=rngs)
 
-  filters: int
-  conv: ModuleDef
-  norm: ModuleDef
-  act: Callable
-  strides: Tuple[int, int] = (1, 1)
+    self.proj = None
+    if stride != 1 or in_features != filters * 4:
+        self.proj = nnx.Sequential(
+            nnx.Conv(in_features, filters * 4, kernel_size=(1, 1), strides=stride, use_bias=False, rngs=rngs),
+            nnx.BatchNorm(filters * 4, momentum=0.9, epsilon=1e-5, rngs=rngs)
+        )
 
-  @nn.compact
-  def __call__(self, x):
+  def __call__(self, x, train: bool):
     residual = x
-    y = self.conv(self.filters, (1, 1))(x)
-    y = self.norm()(y)
-    y = self.act(y)
-    y = self.conv(self.filters, (3, 3), self.strides)(y)
-    y = self.norm()(y)
-    y = self.act(y)
-    y = self.conv(self.filters * 4, (1, 1))(y)
-    y = self.norm(scale_init=nn.initializers.zeros_init())(y)
+    y = self.conv1(x)
+    y = self.bn1(y, use_running_average=not train)
+    y = nnx.relu(y)
+    y = self.conv2(y)
+    y = self.bn2(y, use_running_average=not train)
+    y = nnx.relu(y)
+    y = self.conv3(y)
+    y = self.bn3(y, use_running_average=not train)
 
-    if residual.shape != y.shape:
-      residual = self.conv(self.filters * 4, (1, 1), self.strides, name="conv_proj")(
-          residual
-      )
-      residual = self.norm(name="norm_proj")(residual)
+    if self.proj is not None:
+        residual = self.proj.layers[0](residual)
+        residual = self.proj.layers[1](residual, use_running_average=not train)
 
-    return self.act(residual + y)
+    return nnx.relu(residual + y)
 
 
-class ResNet(nn.Module):
+class ResNet(nnx.Module):
   """ResNetV1."""
+  def __init__(
+      self,
+      stage_sizes: Sequence[int],
+      block_cls: Any,
+      num_classes: int,
+      num_filters: int = 64,
+      rngs: nnx.Rngs = None,
+  ):
+    self.conv1 = nnx.Conv(3, num_filters, kernel_size=(3, 3), strides=1, padding=1, use_bias=False, rngs=rngs)
+    self.bn1 = nnx.BatchNorm(num_filters, momentum=0.9, epsilon=1e-5, rngs=rngs)
 
-  stage_sizes: Sequence[int]
-  block_cls: ModuleDef
-  num_classes: int
-  num_filters: int = 64
-  dtype: Any = jnp.float32
-  act: Callable = nn.relu
-  conv: ModuleDef = nn.Conv
-  initial_conv_config: Optional[Dict[str, Any]] = None
+    self.blocks = []
+    current_filters = num_filters
 
-  @nn.compact
-  def __call__(self, x, train: bool = True):
-    conv = partial(self.conv, use_bias=False, dtype=self.dtype)
-    norm = partial(
-        nn.BatchNorm,
-        use_running_average=not train,
-        momentum=0.9,
-        epsilon=1e-5,
-        dtype=self.dtype,
-    )
-
-    initial_conv_config = dict(self.initial_conv_config)
-    initial_conv_config.setdefault("kernel_size", 7)
-    initial_conv_config.setdefault("strides", 2)
-    initial_conv_config.setdefault("with_bias", False)
-    initial_conv_config.setdefault("padding", "SAME")
-    initial_conv_config.setdefault("name", "initial_conv")
-
-    x = conv(self.num_filters, **self.initial_conv_config)(x)
-    x = norm(name="bn_init")(x)
-    x = nn.relu(x)
-    x = nn.max_pool(x, (3, 3), strides=(2, 2), padding="SAME")
-    for i, block_size in enumerate(self.stage_sizes):
+    for i, block_size in enumerate(stage_sizes):
       for j in range(block_size):
-        strides = (2, 2) if i > 0 and j == 0 else (1, 1)
-        x = self.block_cls(
-            self.num_filters * 2**i,
-            strides=strides,
-            conv=conv,
-            norm=norm,
-            act=self.act,
-        )(x)
-    x = jnp.mean(x, axis=(1, 2))
-    x = nn.Dense(self.num_classes, dtype=self.dtype)(x)
-    x = jnp.asarray(x, self.dtype)
-    return x
+        stride = 2 if i > 0 and j == 0 else 1
+        # Determine filter size expansion
+        filters = num_filters * 2**i
 
+        block = block_cls(current_filters, filters, stride=stride, rngs=rngs)
+        self.blocks.append(block)
+
+        if block_cls == BottleneckResNetBlock:
+             current_filters = filters * 4
+        else:
+             current_filters = filters
+
+    self.linear = nnx.Linear(current_filters, num_classes, rngs=rngs)
+
+  def __call__(self, x, train: bool = True):
+    x = self.conv1(x)
+    x = self.bn1(x, use_running_average=not train)
+    x = nnx.relu(x)
+
+    for block in self.blocks:
+      x = block(x, train=train)
+
+    x = jnp.mean(x, axis=(1, 2))
+    x = self.linear(x)
+    return x
 
 ResNet1 = partial(ResNet, stage_sizes=[1], block_cls=ResNetBlock)
 ResNet18 = partial(ResNet, stage_sizes=[2, 2, 2, 2], block_cls=ResNetBlock)
@@ -302,15 +293,9 @@ ResNet152 = partial(ResNet, stage_sizes=[3, 8, 36, 3], block_cls=BottleneckResNe
 ResNet200 = partial(ResNet, stage_sizes=[3, 24, 36, 3], block_cls=BottleneckResNetBlock)
 ```
 
-+++ {"id": "eokfjycN6Bh5"}
-
 Note that we're overwriting some of the default parameters in this implementation, such as the `kernel_size` and `strides` of the convolutions. The default values of (7, 7) and 2 respectively are too large for the small 32x32 images in this dataset, so we reduce these parameters to (3, 3) and 1 respectively.
 
 ```{code-cell} ipython3
-:id: _kbXJT07L3j5
-
-initial_conv_config = {"kernel_size": (3, 3), "strides": 1, "padding": "SAME"}
-
 RESNET_CONSTRUCTOR = {
     "resnet1": ResNet1,
     "resnet18": ResNet18,
@@ -321,69 +306,15 @@ RESNET_CONSTRUCTOR = {
     "resnet200": ResNet200,
 }
 
-net = RESNET_CONSTRUCTOR[MODEL](num_classes=NUM_CLASSES, initial_conv_config=initial_conv_config)
+# Initialize the model
+rngs = nnx.Rngs(0)
+model = RESNET_CONSTRUCTOR[MODEL](num_classes=NUM_CLASSES, rngs=rngs)
 
-def predict(params, bn_params, inputs, is_training=False):
-  all_params = {"params": params, "batch_stats": bn_params}
-
-  def train_fn(inputs):
-    logits, net_state = net.apply(
-        all_params, inputs, train=True, mutable=["batch_stats"]
-    )
-    return logits, net_state
-
-  def eval_fn(inputs):
-    logits = net.apply(all_params, inputs, train=False, mutable=False)
-    return logits, {"batch_stats": bn_params}
-
-  return jax.lax.cond(
-      is_training, lambda x: train_fn(x), lambda x: eval_fn(x), inputs
-  )
-
-
-@partial(jax.jit, static_argnums=(3,))
-def loss_accuracy(params, bn_params, data, is_training: bool = True):
-  """Computes loss and accuracy over a mini-batch.
-
-  Args:
-    params: parameters of the model.
-    bn_params: state of the model.
-    data: tuple of (inputs, labels).
-    is_training: if true, uses train mode, otherwise uses eval mode.
-
-  Returns:
-    loss: float
-    aux: dictionary with keys "accuracy" and "batch_stats".
-  """
-  inputs, labels = data
-  logits, net_state = predict(params, bn_params, inputs, is_training=is_training)
-  mean_loss = optax.softmax_cross_entropy_with_integer_labels(
-      logits=logits, labels=labels
-  ).mean()
-  accuracy = jnp.mean(jnp.argmax(logits, axis=-1) == labels)
-  l2_params = jax.tree.leaves(params)
-  # Computes regularization on all except batchnorm parameters.
-  weight_l2 = sum(jnp.sum(x**2) for x in l2_params if x.ndim > 1)
-  loss = mean_loss + 0.5 * L2_REG * weight_l2
-  return loss, {"accuracy": accuracy, "batch_stats": net_state["batch_stats"]}
+# Visual check of structure
+nnx.display(model)
 ```
 
 ```{code-cell} ipython3
----
-colab:
-  base_uri: https://localhost:8080/
-  height: 472
-executionInfo:
-  elapsed: 358
-  status: ok
-  timestamp: 1701459142819
-  user:
-    displayName: Masha Samsikova
-    userId: '12506121178718715127'
-  user_tz: 0
-id: WWIy3HjZd4nz
-outputId: 1ba98f00-aae5-431e-b7b3-0b79c7963272
----
 iter_per_epoch_train = info.splits["train"].num_examples // BATCH_SIZE
 lr_schedule = optax.linear_onecycle_schedule(
     MAX_EPOCHS * iter_per_epoch_train, PEAK_LR
@@ -403,126 +334,99 @@ plt.xlim((0, MAX_EPOCHS))
 plt.show()
 ```
 
-+++ {"id": "1_2VpAIid4nz"}
+## Optimization and Training Loop
+We use `nnx.Optimizer` to manage the optimization state.
 
-In the next two cells initialize variables and states. We also define a convenience function `dataset_stats` that we'll call once per epoch to collect the loss and accuracy of our solver over the test set.
+In the `compute_loss` function, we leverage `optax` for both the cross-entropy loss (`optax.softmax_cross_entropy_with_integer_labels`) and L2 regularization (`optax.l2_loss`).
 
-```{code-cell} ipython3
-:id: xLTQpLg1L3j5
-
-solver = optax.sgd(lr_schedule, momentum=0.9, nesterov=False)
-
-# Initializes parameters.
-rng = jax.random.PRNGKey(0)
-dummy_data = jnp.ones((1,) + IMG_SIZE, dtype=jnp.float32)
-dummy_targets = jnp.ones(1, int)
-variables = net.init({"params": rng}, dummy_data)
-
-var_params, net_state = variables["params"], variables["batch_stats"]
-```
+The `train_step` uses `nnx.jit` and `nnx.value_and_grad` to compute gradients and update the model in-place.
 
 ```{code-cell} ipython3
-:id: Fu9Lu_dC0u3I
+optimizer = nnx.Optimizer(model, optax.sgd(lr_schedule, momentum=0.9, nesterov=False), wrt=nnx.Param)
 
-# Defines parameter update function.
-var_solver_state = solver.init(var_params)
+def compute_loss(model, batch, training: bool):
+    logits = model(batch['image'], train=training)
+    labels = batch['label']
 
+    loss = optax.softmax_cross_entropy_with_integer_labels(
+        logits=logits, labels=labels
+    ).mean()
 
-def dataset_stats(params, net_state, data_loader):
-  """Computes loss and accuracy over the dataset `data_loader`."""
-  all_accuracy = []
-  all_loss = []
-  for cur_batch in data_loader.as_numpy_iterator():
-    batch_loss, batch_aux = loss_accuracy(
-        params, net_state, cur_batch, is_training=False
+    params = nnx.state(model, nnx.Param)
+    l2_penalty = sum(
+        jnp.sum(optax.l2_loss(p))
+        for p in jax.tree_util.tree_leaves(params)
     )
-    all_loss.append(batch_loss)
-    all_accuracy.append(batch_aux["accuracy"])
-  return {"loss": np.mean(all_loss), "accuracy": np.mean(all_accuracy)}
+
+    total_loss = loss + L2_REG * l2_penalty
+    accuracy = jnp.mean(jnp.argmax(logits, axis=-1) == labels)
+
+    return total_loss, accuracy
+
+@nnx.jit
+def train_step(model, optimizer, batch):
+    grad_fn = nnx.value_and_grad(compute_loss, has_aux=True)
+    (loss, accuracy), grads = grad_fn(model, batch, training=True)
+    optimizer.update(model, grads)
+    return loss, accuracy
+
+@nnx.jit
+def eval_step(model, batch):
+    loss, accuracy = compute_loss(model, batch, training=False)
+    return loss, accuracy
+
+def evaluate(model, data_loader):
+    losses, accuracies = [], []
+    for batch in data_loader:
+        loss, acc = eval_step(model, batch)
+        losses.append(loss)
+        accuracies.append(acc)
+    return np.mean(losses), np.mean(accuracies)
 ```
 
-+++ {"id": "49L9gffyDBkO"}
+## Run Training
 
-Finally, we do the actual training. The next cell performs `'MAX_EPOCHS'` epochs of training. Within each epoch we iterate over the batched loader `train_loader_batched`, and once per epoch we also compute the test set accuracy and loss.
+Finally, we do the actual training. The next cell performs `'MAX_EPOCHS'` epochs of training. Within each epoch we iterate over the batched loader, and once per epoch we also compute the test set accuracy and loss.
 
 ```{code-cell} ipython3
----
-colab:
-  base_uri: https://localhost:8080/
-executionInfo:
-  elapsed: 69602
-  status: ok
-  timestamp: 1701460033377
-  user:
-    displayName: Masha Samsikova
-    userId: '12506121178718715127'
-  user_tz: 0
-id: loz4M9I5SLRu
-outputId: b2aae413-5568-4e83-f070-3ec5b85982a7
----
 train_accuracy = []
 train_losses = []
+test_accuracy = []
+test_losses = []
 
 # Computes test set accuracy at initialization.
-test_stats = dataset_stats(var_params, net_state, test_loader_batched)
-test_accuracy = [test_stats["accuracy"]]
-test_losses = [test_stats["loss"]]
-
-
-@jax.jit
-def train_step(params, net_state, solver_state, batch):
-  # Performs a one step update.
-  (loss, aux), grad = jax.value_and_grad(loss_accuracy, has_aux=True)(
-      params, net_state, batch, is_training=True
-  )
-  updates, solver_state = solver.update(grad, solver_state)
-  params = optax.apply_updates(params, updates)
-  return params, solver_state, loss, aux
-
+test_loss, test_acc = evaluate(model, test_loader_fn())
+test_accuracy.append(test_acc)
+test_losses.append(test_loss)
 
 # Executes a training loop.
 for epoch in range(MAX_EPOCHS):
-  train_accuracy_epoch = []
-  train_losses_epoch = []
+    train_accuracy_epoch = []
+    train_losses_epoch = []
 
-  for train_batch in train_loader_batched.as_numpy_iterator():
-    var_params, var_solver_state, train_loss, train_aux = train_step(
-        var_params, net_state, var_solver_state, train_batch
-    )
-    net_state = train_aux["batch_stats"]
-    train_accuracy_epoch.append(train_aux["accuracy"])
-    train_losses_epoch.append(train_loss)
+    # Train for one epoch
+    for train_batch in train_loader_fn():
+        train_loss, train_acc = train_step(model, optimizer, train_batch)
+        train_accuracy_epoch.append(train_acc)
+        train_losses_epoch.append(train_loss)
 
-  #  Once per epoch, makes a pass over the test set to compute accuracy.
-  test_stats = dataset_stats(var_params, net_state, test_loader_batched)
-  test_accuracy.append(test_stats["accuracy"])
-  test_losses.append(test_stats["loss"])
-  train_accuracy.append(np.mean(train_accuracy_epoch))
-  train_losses.append(np.mean(train_losses_epoch))
+    # Calculate average train metrics for the epoch
+    train_accuracy.append(np.mean(train_accuracy_epoch))
+    train_losses.append(np.mean(train_losses_epoch))
 
-  # Prints accuracy every 10 epochs.
-  if epoch % 10 == 0:
-    print("Epoch: ", epoch)
-    print("Test set accuracy: ", test_accuracy[-1])
-    print("Train set accuracy: ", np.mean(train_accuracy_epoch))
+    # Evaluate on test set
+    test_loss, test_acc = evaluate(model, test_loader_fn())
+    test_accuracy.append(test_acc)
+    test_losses.append(test_loss)
+
+    # Prints accuracy every 10 epochs.
+    if epoch % 10 == 0:
+      print(f"Epoch: {epoch}")
+      print(f"Test set accuracy: {test_accuracy[-1]:.4f}")
+      print(f"Train set accuracy: {train_accuracy[-1]:.4f}")
 ```
 
 ```{code-cell} ipython3
----
-colab:
-  base_uri: https://localhost:8080/
-  height: 669
-executionInfo:
-  elapsed: 414
-  status: ok
-  timestamp: 1701460033792
-  user:
-    displayName: Masha Samsikova
-    userId: '12506121178718715127'
-  user_tz: 0
-id: dy2EnSiCL3j5
-outputId: abb277d5-f971-4385-94b7-80131ec45b8d
----
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
 
 plt.suptitle(f"{MODEL} on {DATASET}", fontsize=20)
@@ -560,12 +464,12 @@ ax2.plot(
     markersize=10,
     label="train set (stochastic estimate)",
 )
+
 ax2.set_ylabel("Loss", fontsize=20)
 ax2.grid()
 ax2.set_xlabel("Epochs", fontsize=20)
 ax2.set_xlim((0, MAX_EPOCHS))
 
-# set legend at the bottom of the plot
 ax1.legend(
     frameon=False, fontsize=20, ncol=2, loc=2, bbox_to_anchor=(0.3, -0.1)
 )
@@ -576,26 +480,6 @@ plt.show()
 ```
 
 ```{code-cell} ipython3
----
-colab:
-  base_uri: https://localhost:8080/
-executionInfo:
-  elapsed: 3
-  status: ok
-  timestamp: 1701460033792
-  user:
-    displayName: Masha Samsikova
-    userId: '12506121178718715127'
-  user_tz: 0
-id: pKxQZ13kL3j5
-outputId: 2b4ababf-18cf-41e0-be5c-419ea8e19a63
----
 # Finally, let's print the test set accuracy
 print("Final accuracy on test set: ", test_accuracy[-1])
-```
-
-```{code-cell} ipython3
-:id: dpg7oiGEQy22
-
-
 ```

@@ -1,17 +1,3 @@
----
-jupyter:
-  jupytext:
-    text_representation:
-      extension: .md
-      format_name: markdown
-      format_version: '1.3'
-      jupytext_version: 1.17.3
-  kernelspec:
-    display_name: Python 3
-    name: python3
----
-
-<!-- #region id="Ch-DCRdcNnLY" -->
 # L-BFGS
 
 L-BFGS is a classical optimization method that uses past gradients and parameters information to iteratively refine a solution to a minimization problem. In this notebook, we illustrate
@@ -19,9 +5,8 @@ L-BFGS is a classical optimization method that uses past gradients and parameter
 2. how to wrap L-BFGS in a solver, and how linesearches are incorporated,
 3. how to debug the solver if needed.
 
-<!-- #endregion -->
 
-```python id="0kUKnsM4nb5m"
+```python
 from typing import NamedTuple
 
 import jax
@@ -32,12 +17,10 @@ import optax
 import optax.tree
 ```
 
-<!-- #region id="Cja5fd5FTlGs" -->
 ## L-BFGS as a gradient transformation
 
-<!-- #endregion -->
 
-<!-- #region id="UbkaJmath6Np" -->
+
 ### What is L-BFGS?
 
 To solve a problem of the form
@@ -56,15 +39,13 @@ where, at iteration $k$, $w_k$ are the parameters, $g_k = \nabla f_k$ are the gr
 
 L-BFGS builds the preconditioning matrix $P_k$ as an approximation of the Hessian inverse $P_k \approx \nabla^2 f(w_k)^{-1}$ using past gradient and parameters information. Briefly, at iteration $k$, the previous preconditioning matrix $P_{k-1}$ is updated such that $P_k$ satisfies the secant condition $P_k(w_k-w_{k-1}) = g_k -g_{k-1}$. The original BFGS algorithm updates $P_k$ using all past information, the limited-memory variant only uses a fixed number of past parameters and gradients to build $P_k$. See [Nocedal and Wright, Numerical Optimization, 1999](https://www.math.kent.edu/~reichel/courses/optimization/Numerical_Optimization.pdf) or the [documentation](https://optax.readthedocs.io/en/latest/api/transformations.html#optax.scale_by_lbfgs) for more details on the implementation.
 
-<!-- #endregion -->
 
-<!-- #region id="2eoJ_CrpmgqK" -->
+
 ### Using L-BFGS as a gradient transformation
 
 The function {py:func}`optax.scale_by_lbfgs` implements the update of the preconditioning matrix given a running optimizer state $s_k$. Given $(g_k, s_k, w_k)$, this function returns $(P_kg_k, s_{k+1})$. We illustrate its performance below on a simple convex quadratic.
-<!-- #endregion -->
 
-```python id="gySpnJ-ch5YT"
+```python
 # Define objective
 dim = 8
 w_opt = jnp.ones(dim)
@@ -94,13 +75,11 @@ for i in range(16):
 print(f'Final value: {fun(w):.2e}')
 ```
 
-<!-- #region id="f-1P4_79rnow" -->
 ## L-BFGS as a solver
 
 L-BFGS is a sample in numerical optimization to solve medium scale problems. It is often the backend of generic minimization functions in software libraries like [scipy](https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.minimize.html#scipy.optimize.minimize). A key ingredient to make it a simple optimization blackbox, is to remove the need of tuning the stepsize, a.k.a. learning rate in machine learning. In a deterministic setting (no additional varying inputs like inputs/labels), such automatic tuning of the stepsize is done by means of linesearches reviewed below.
-<!-- #endregion -->
 
-<!-- #region id="6KIZE_pFwdcz" -->
+
 ### What are linesearches?
 
 Given current parameters $w_k$, an update direction $u_k$ (such as the negative preconditioned gradient $u_k = -P_k g_k$ returned by L-BFGS), a linesearch computes a stepsize $\eta_k$ such that the next iterate $w_{k+1} = w_k + \eta_k u_k$ satisfies some criterions.
@@ -130,15 +109,13 @@ $$
 See Chapter 3 of [Nocedal and Wright, Numerical Optimization, 1999](https://www.math.kent.edu/~reichel/courses/optimization/Numerical_Optimization.pdf) for some illustrations of this criterion. A linesearch method that can ensure both criterions require some form of bisection method implemented in optax with the {py:func}`optax.scale_by_zoom_linesearch` method. Several other linesearch techniques exist, see e.g. https://github.com/JuliaNLSolvers/LineSearches.jl. It is generally recommended to combine L-BFGS with a line-search ensuring both sufficient decrease and small curvature, which the {py:func}`optax.scale_by_zoom_linesearch` ensures.
 
 
-<!-- #endregion -->
 
-<!-- #region id="PmaDMT8O2dub" -->
+
 ### Linesearches in practice
 
 To find a stepsize satisfying the above criterions, a linesearch needs to access the value and potentially the gradient of the function. So linesearches in optax are implemented as {py:func}`optax.GradientTransformationExtraArgs`, which take the current value, gradient of the objective as well as the function itself. We illustrate this below with {py:func}`optax.scale_by_backtracking_linesearch`.
-<!-- #endregion -->
 
-```python id="Fz3RcdDA3714"
+```python
 # Objective
 def fun(w):
   return jnp.sum(jnp.abs(w))
@@ -169,15 +146,13 @@ for i in range(16):
 print(f'Final value: {fun(w):.2e}')
 ```
 
-<!-- #region id="CLShtM0s3TAP" -->
 To validate the stepsize the linesearch calls the function several times. If a stepsize is accepted, we have then a priori access to the value of the function, and, potentially its gradient. The implementation of the linesearches in optax store the value and the gradient computed by the linesearch to avoid recomputing them at the next step. In practice, the code above can be modified as follows.
 
 *Note:*
 The backtracking linesearch only evaluates the function and does not compute the gradient natively. To make the backtracking linesearch compute and store the gradient at the stepsize taken, we add the flag `store_grad=True`, see below.
 The zoom linesearch always compute both function and gradient so there is no need to specify an additional flag.
-<!-- #endregion -->
 
-```python id="RFH5Llz06iwX"
+```python
 # Objective
 def fun(w):
   return jnp.sum(jnp.abs(w))
@@ -206,7 +181,6 @@ for _ in range(16):
 print(f'Final value: {fun(w):.2e}')
 ```
 
-<!-- #region id="Fqylj3ANOiYa" -->
 ### L-BFGS solver
 
 Optax combines then the gradient transformation of L-BFGS and a linesearch in `optax.lbfgs()`.
@@ -217,9 +191,8 @@ We present below a wrapper that combines both into a solver which tries to find 
 3. the instance of the L-BFGS solver considered `opt`,
 4. a maximal number of iteration `max_iter`,
 5. a tolerance `tol` on the optimization error measured here as the gradient norm.
-<!-- #endregion -->
 
-```python id="3BM2rlAGUx7K"
+```python
 def run_opt(init_params, fun, opt, max_iter, tol):
   value_and_grad_fun = optax.value_and_grad_from_state(fun)
 
@@ -246,11 +219,9 @@ def run_opt(init_params, fun, opt, max_iter, tol):
   return final_params, final_state
 ```
 
-<!-- #region id="Ohk5KQqfZgWt" -->
 We can test the solver on the [Rosenbrock function](https://www.sfu.ca/~ssurjano/rosen.html).
-<!-- #endregion -->
 
-```python id="bVrZLiSVZfue"
+```python
 def fun(w):
   return jnp.sum(100.0 * (w[1:] - w[:-1] ** 2) ** 2 + (1.0 - w[:-1]) ** 2)
 
@@ -267,11 +238,9 @@ print(
 )
 ```
 
-<!-- #region id="KinZFIXxbBxy" -->
 We may add additional information by simply chaining `optax.lbfgs` with an identity transform that just prints relevant information as follows.
-<!-- #endregion -->
 
-```python id="YB4NqbThbdo7"
+```python
 class InfoState(NamedTuple):
   iter_num: jax.typing.ArrayLike
 
@@ -312,21 +281,18 @@ print(
 )
 ```
 
-<!-- #region id="KZIu7UDveO6D" -->
 ## Debugging
 
 
-<!-- #endregion -->
 
-<!-- #region id="LV8CslWpoDDq" -->
+
 ### Accessing debug information
 
 In some cases, L-BFGS with a linesearch as a solver will fail. Most of the times, the culprit goes down to the linesearch. To debug the solver in such cases, we provide a `verbose` option to the `optax.scale_by_zoom_linesearch`. We show below how to proceed.
 
 To demonstrate such bug, we try to minimize the [Zakharov function](https://www.sfu.ca/~ssurjano/zakharov.html) and set the `scale_init_precond` option to `False` (by choosing the default option `scale_init_precond=True`, the algorithm would actually run fine, we just want to showcase the possibility to use debugging in the linesearch here). You'll observe that the final value is the same as the initial value which points out that the solver failed.
-<!-- #endregion -->
 
-```python id="NbyxeORif9wf"
+```python
 def fun(w):
   ii = jnp.arange(1, len(w) + 1, step=1, dtype=w.dtype)
   sum1 = (w**2).sum()
@@ -347,15 +313,13 @@ print(
 )
 ```
 
-<!-- #region id="uwcbY5UXohZB" -->
 The default implementation of the linesearch in the code is
 ```
 scale_by_zoom_linesearch(max_linesearch_steps=20, initial_guess_strategy='one')
 ```
 To debug we can set the verbose option of the linesearch to `True`.
-<!-- #endregion -->
 
-```python id="j8FUTkc8o3l2"
+```python
 opt = optax.chain(print_info(), optax.lbfgs(scale_init_precond=False,
   linesearch=optax.scale_by_zoom_linesearch(
       max_linesearch_steps=20, verbose=True, initial_guess_strategy='one'
@@ -374,11 +338,9 @@ print(
 )
 ```
 
-<!-- #region id="nCgpjzCbo7p9" -->
 As expected, the linesearch failed at the very first step taking a stepsize that did not ensure a sufficient decrease. Multiple information is displayed. For example, the slope (derivative along the update direction) at the first step is extremely large which explains the difficulties to find an appropriate stepsize. As pointed out in the log above, the first thing to try is to use a larger number of linesearch steps.
-<!-- #endregion -->
 
-```python id="nA9WVXykpaKf"
+```python
 opt = optax.chain(print_info(), optax.lbfgs(scale_init_precond=False,
   linesearch=optax.scale_by_zoom_linesearch(
       max_linesearch_steps=50, verbose=True, initial_guess_strategy='one'
@@ -397,12 +359,10 @@ print(
 )
 ```
 
-<!-- #region id="na-7s1Q2o1Rc" -->
 By simply taking a maximum of 50 steps of the linesearch instead of 20, we ensured that the first stepsize taken provided a sufficient decrease and the solver worked well.
 Additional debugging information can be found in the source code accessible from the docs of {py:func}`optax.scale_by_zoom_linesearch`.
-<!-- #endregion -->
 
-<!-- #region id="74ZbgzcKoJ0J" -->
+
 ### Tips
 
 - **LBFGS**
@@ -416,17 +376,15 @@ Additional debugging information can be found in the source code accessible from
 
 You may run the solver in double precision by setting `jax.config.update("jax_enable_x64", True)`. If you use double precision, consider augmenting the number of linesearch steps to reach the machine precision (like using `max_linesearch_steps=55`).
 
-<!-- #endregion -->
 
-<!-- #region id="T-oGa3P2sCbH" -->
+
 ## Contributing and benchmarking
 
 Numerous other linesearch could be implemented, as well as other solvers for medium scale problems without stochasticity. Contributions are welcome.
 
 If you want to contribute a new solver for medium scale problems like LBFGS, benchmarks would be highly appreciated. We provide below an example of benchmark (which could also be used if you want to test some hyperparameters of the algorithm). We take here the classical Rosenbroke function, but it could be better to expand such benchmarks to e.g. the set of test functions given by [Andrei, 2008](https://camo.ici.ro/journal/vol10/v10a10.pdf).
-<!-- #endregion -->
 
-```python id="MagDCuGjsB5x"
+```python
 import time
 num_fun_calls = 0
 
@@ -462,7 +420,7 @@ def test_hparams(lbfgs_hparams, linesearch_hparams, dimension=512):
 
 ```
 
-```python id="7CXMxWsztGf5"
+```python
 import copy
 import matplotlib.pyplot as plt
 

@@ -1,18 +1,3 @@
----
-jupytext:
-  formats: ipynb,md:myst
-  text_representation:
-    extension: .md
-    format_name: myst
-    format_version: 0.13
-    jupytext_version: 1.17.3
-kernelspec:
-  display_name: Python 3
-  name: python3
----
-
-+++ {"id": "cib2jXJDQ4Nz"}
-
 # Adversarial training
 
 
@@ -41,23 +26,11 @@ To run the colab locally you need install the
 `tensorflow-datasets`, `grain` packages via `pip`.
 
 ```{code-cell} ipython3
----
-executionInfo:
-  elapsed: 3773
-  status: ok
-  timestamp: 1707150623004
-  user:
-    displayName: ''
-    userId: ''
-  user_tz: 0
-id: diO66z2ZQ4N3
-outputId: bb764d5c-9684-4a74-9906-5e37e8fa23a4
----
 import datetime
 
 import jax
 from jax import numpy as jnp
-from flax import linen as nn
+from flax import nnx
 
 import optax
 from optax.losses import softmax_cross_entropy_with_integer_labels
@@ -74,17 +47,6 @@ print("JAX running on", jax.devices()[0].platform.upper())
 ```
 
 ```{code-cell} ipython3
----
-executionInfo:
-  elapsed: 52
-  status: ok
-  timestamp: 1707150623148
-  user:
-    displayName: ''
-    userId: ''
-  user_tz: 0
-id: sWqYXjZFpUXe
----
 # @markdown Total number of epochs to train for:
 EPOCHS = 10  # @param{type:"integer"}
 # @markdown Number of samples for each batch in the training set:
@@ -102,48 +64,29 @@ EPSILON = 0.01  # @param{type:"number"}
 ```
 
 ```{code-cell} ipython3
----
-executionInfo:
-  elapsed: 54
-  status: ok
-  timestamp: 1707150623297
-  user:
-    displayName: ''
-    userId: ''
-  user_tz: 0
-id: kwr2gSOZQ4N7
----
-class CNN(nn.Module):
-  """A simple CNN model."""
-  num_classes: int
+class CNN(nnx.Module):
+  """A simple CNN model using flax.nnx."""
+  def __init__(self, num_classes: int, rngs: nnx.Rngs):
+    self.conv1 = nnx.Conv(in_features=1, out_features=32, kernel_size=(3, 3), rngs=rngs)
+    self.conv2 = nnx.Conv(in_features=32, out_features=64, kernel_size=(3, 3), rngs=rngs)
+    self.dense1 = nnx.Linear(in_features=3136, out_features=256, rngs=rngs) # 3136 is for 28x28 input
+    self.dense2 = nnx.Linear(in_features=256, out_features=num_classes, rngs=rngs)
 
-  @nn.compact
   def __call__(self, x):
-    x = nn.Conv(features=32, kernel_size=(3, 3))(x)
-    x = nn.relu(x)
-    x = nn.avg_pool(x, window_shape=(2, 2), strides=(2, 2))
-    x = nn.Conv(features=64, kernel_size=(3, 3))(x)
-    x = nn.relu(x)
-    x = nn.avg_pool(x, window_shape=(2, 2), strides=(2, 2))
+    x = self.conv1(x)
+    x = nnx.relu(x)
+    x = nnx.avg_pool(x, window_shape=(2, 2), strides=(2, 2))
+    x = self.conv2(x)
+    x = jax.nn.relu(x)
+    x = nnx.avg_pool(x, window_shape=(2, 2), strides=(2, 2))
     x = x.reshape((x.shape[0], -1))  # flatten
-    x = nn.Dense(features=256)(x)
-    x = nn.relu(x)
-    x = nn.Dense(features=self.num_classes)(x)
+    x = self.dense1(x)
+    x = nnx.relu(x)
+    x = self.dense2(x)
     return x
 ```
 
 ```{code-cell} ipython3
----
-executionInfo:
-  elapsed: 6789
-  status: ok
-  timestamp: 1707150630219
-  user:
-    displayName: ''
-    userId: ''
-  user_tz: 0
-id: NUBxQ4c5LPwp
----
 train_source, test_source = tfds.data_source("mnist", split=["train", "test"])
 
 train_loader_batched = (
@@ -165,33 +108,22 @@ iter_per_epoch_test = len(test_loader_batched)
 ```
 
 ```{code-cell} ipython3
----
-executionInfo:
-  elapsed: 53
-  status: ok
-  timestamp: 1707150630371
-  user:
-    displayName: ''
-    userId: ''
-  user_tz: 0
-id: trBo7PpcQ4N8
----
-net = CNN(num_classes)
+model = CNN(num_classes, rngs=nnx.Rngs(0))
 
-@jax.jit
-def accuracy(params, data):
+@nnx.jit
+def accuracy(model, data):
   inputs, labels = data
-  logits = net.apply({"params": params}, inputs)
+  logits = model(inputs)
   return jnp.mean(jnp.argmax(logits, axis=-1) == labels)
 
 
-@jax.jit
-def loss_fun(params, l2reg, data):
+@nnx.jit
+def loss_fun(model, l2reg, data):
   """Compute the loss of the network."""
   inputs, labels = data
   x = inputs.astype(jnp.float32)
-  logits = net.apply({"params": params}, x)
-  sqnorm = tree_norm(params, squared=True)
+  logits = model(x)
+  sqnorm = tree_norm(nnx.state(model, nnx.Param), squared=True)
   loss_value = jnp.mean(softmax_cross_entropy_with_integer_labels(logits, labels))
   return loss_value + 0.5 * l2reg * sqnorm
 
@@ -215,13 +147,13 @@ def pgd_attack(image, label, params, epsilon=0.1, maxiter=10):
     https://arxiv.org/pdf/1706.06083.pdf
   """
   image_perturbation = jnp.zeros_like(image)
-  def adversarial_loss(perturbation):
-    return loss_fun(params, 0, (image + perturbation, label))
+  def adversarial_loss(model, perturbation):
+    return loss_fun(model, 0, (image + perturbation, label))
 
-  grad_adversarial = jax.grad(adversarial_loss)
+  grad_adversarial = nnx.grad(adversarial_loss, argnums=1)
   for _ in range(maxiter):
-    # compute gradient of the loss wrt to the image
-    sign_grad = jnp.sign(grad_adversarial(image_perturbation))
+    # compute gradient of the loss wrt to the image perturbation
+    sign_grad = jnp.sign(grad_adversarial(model, image_perturbation))
 
     # heuristic step-size 2 eps / maxiter
     image_perturbation += (2 * epsilon / maxiter) * sign_grad
@@ -233,63 +165,36 @@ def pgd_attack(image, label, params, epsilon=0.1, maxiter=10):
 ```
 
 ```{code-cell} ipython3
----
-executionInfo:
-  elapsed: 53
-  status: ok
-  timestamp: 1707150630531
-  user:
-    displayName: ''
-    userId: ''
-  user_tz: 0
-id: QgQcIgg2Z2XB
----
-def dataset_stats(params, data_loader, iter_per_epoch):
+def dataset_stats(model, data_loader, iter_per_epoch):
   """Computes accuracy on clean and adversarial images."""
   adversarial_accuracy = 0.
   clean_accuracy = 0.
   for batch in data_loader:
     images, labels = batch
     images = images.astype(jnp.float32) / 255
-    clean_accuracy += jnp.mean(accuracy(params, (images, labels))) / iter_per_epoch
-    adversarial_images = pgd_attack(images, labels, params, epsilon=EPSILON)
-    adversarial_accuracy += jnp.mean(accuracy(params, (adversarial_images, labels))) / iter_per_epoch
+    clean_accuracy += jnp.mean(accuracy(model, (images, labels))) / iter_per_epoch
+    adversarial_images = pgd_attack(images, labels, model, epsilon=EPSILON)
+    adversarial_accuracy += jnp.mean(accuracy(model, (adversarial_images, labels))) / iter_per_epoch
   return {"adversarial accuracy": adversarial_accuracy, "accuracy": clean_accuracy}
 
-@jax.jit
-def train_step(params, opt_state, batch):
+@nnx.jit
+def train_step(model, optimizer, batch):
   images, labels = batch
   # convert images to float as attack requires to take gradients wrt to them
   images = images.astype(jnp.float32) / 255
-  adversarial_images_train = pgd_attack(images, labels, params, epsilon=EPSILON)
+  adversarial_images_train = pgd_attack(images, labels, model, epsilon=EPSILON)
   # train on adversarial images
-  loss_grad_fun = jax.grad(loss_fun)
-  grads = loss_grad_fun(params, L2_REG, (adversarial_images_train, labels))
-  updates, opt_state = optimizer.update(grads, opt_state)
-  params = optax.apply_updates(params, updates)
-  return params, opt_state
+  loss_grad_fun = nnx.value_and_grad(loss_fun)
+  loss, grads = loss_grad_fun(model, L2_REG, (adversarial_images_train, labels))
+  optimizer.update(model, grads)
 ```
 
 ```{code-cell} ipython3
----
-executionInfo:
-  elapsed: 62308
-  status: ok
-  timestamp: 1707150692933
-  user:
-    displayName: ''
-    userId: ''
-  user_tz: 0
-id: nwt6HuxhCd1a
-outputId: 71338c4a-356d-4749-e5ad-d186ccf5d82e
----
 # Initialize parameters.
-key = jax.random.PRNGKey(0)
-var_params = net.init(key, jnp.zeros(input_shape))["params"]
+model = CNN(num_classes, rngs=nnx.Rngs(0))
 
-# Initialize the optimizer.
-optimizer = optax.adam(LEARNING_RATE)
-opt_state = optimizer.init(var_params)
+# Initialize the optimizer using nnx.
+optimizer = nnx.Optimizer(model, optax.adam(LEARNING_RATE), wrt=nnx.Param)
 
 start = datetime.datetime.now().replace(microsecond=0)
 
@@ -299,15 +204,15 @@ adversarial_accuracy_train = []
 adversarial_accuracy_test = []
 for epoch in range(EPOCHS):
   for train_batch in train_loader_batched:
-    var_params, opt_state = train_step(var_params, opt_state, train_batch)
+    train_step(model, optimizer, train_batch)
 
   # compute train set accuracy, both on clean and adversarial images
-  train_stats = dataset_stats(var_params, train_loader_batched, iter_per_epoch_train)
+  train_stats = dataset_stats(model, train_loader_batched, iter_per_epoch_train)
   accuracy_train.append(train_stats["accuracy"])
   adversarial_accuracy_train.append(train_stats["adversarial accuracy"])
 
   # compute test set accuracy, both on clean and adversarial images
-  test_stats = dataset_stats(var_params, test_loader_batched, iter_per_epoch_test)
+  test_stats = dataset_stats(model, test_loader_batched, iter_per_epoch_test)
   accuracy_test.append(test_stats["accuracy"])
   adversarial_accuracy_test.append(test_stats["adversarial accuracy"])
 
@@ -321,20 +226,6 @@ for epoch in range(EPOCHS):
 ```
 
 ```{code-cell} ipython3
----
-colab:
-  height: 483
-executionInfo:
-  elapsed: 419
-  status: ok
-  timestamp: 1707150693452
-  user:
-    displayName: ''
-    userId: ''
-  user_tz: 0
-id: vQnv1S84Q4N-
-outputId: bd622b38-d865-4fcd-e746-2621eff0b57c
----
 fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(16, 6))
 
 plt.suptitle("Adversarial training on " + f"{DATASET}".upper())
@@ -371,33 +262,20 @@ plt.subplots_adjust(wspace=0.5)
 plt.show()
 ```
 
-+++ {"id": "GAPfMtFKQ4N-"}
-
 Find a test set image that is correctly classified but not its adversarial perturbation
 
 ```{code-cell} ipython3
----
-executionInfo:
-  elapsed: 1666
-  status: ok
-  timestamp: 1707150695251
-  user:
-    displayName: ''
-    userId: ''
-  user_tz: 0
-id: 5o-Qf1qEQ4N_
----
-def find_adversarial_imgs(params, loader_batched):
+def find_adversarial_imgs(model, loader_batched):
   """Finds a test set image that is correctly classified but not its adversarial perturbation."""
   for batch in loader_batched:
     images, labels = batch
     images = images.astype(jnp.float32) / 255
-    logits = net.apply({"params": params}, images)
+    logits = model(images)
     labels_clean = jnp.argmax(logits, axis=-1)
 
-    adversarial_images = pgd_attack(images, labels, params, epsilon=EPSILON)
+    adversarial_images = pgd_attack(images, labels, model, epsilon=EPSILON)
     labels_adversarial = jnp.argmax(
-        net.apply({"params": params}, adversarial_images), axis=-1
+        model(adversarial_images), axis=-1
     )
     idx_misclassified = jnp.where(labels_clean != labels_adversarial)[0]
     for j in idx_misclassified:
@@ -420,25 +298,11 @@ def find_adversarial_imgs(params, loader_batched):
 
 
 img_clean, pred_clean, img_adversarial, prediction_adversarial = (
-    find_adversarial_imgs(var_params, test_loader_batched)
+    find_adversarial_imgs(model, test_loader_batched)
 )
 ```
 
 ```{code-cell} ipython3
----
-colab:
-  height: 386
-executionInfo:
-  elapsed: 487
-  status: ok
-  timestamp: 1707150695836
-  user:
-    displayName: ''
-    userId: ''
-  user_tz: 0
-id: aF2-kSuQQ4N_
-outputId: 25b60801-8954-4c42-a5d6-92ab4d0d7d0d
----
 _, axes = plt.subplots(nrows=1, ncols=3, figsize=(6 * 3, 6))
 
 axes[0].set_title("Clean image \n Prediction %s" % int(pred_clean))
@@ -459,16 +323,5 @@ plt.show()
 ```
 
 ```{code-cell} ipython3
----
-executionInfo:
-  elapsed: 2
-  status: ok
-  timestamp: 1707150695968
-  user:
-    displayName: ''
-    userId: ''
-  user_tz: 0
-id: pG7U7jzxQ4OA
----
 
 ```
