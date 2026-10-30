@@ -90,6 +90,10 @@ def main() -> int:
     for path in sorted(set(out_of_sync)):
       print(f"  {path}")
     print(f"Please stage and commit them: git add {PREVIEW_DIR}")
+    print(
+        "If you did not change these notebooks, main is out of sync and"
+        " committing the regenerated previews fixes it."
+    )
     return 1
   return 0
 

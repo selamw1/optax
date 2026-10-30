@@ -77,7 +77,7 @@ Notebook diffs are hard to review, so each notebook has a Markdown preview in
 [pre-commit](https://pre-commit.com/) hook keeps the previews in sync: install
 it once with `pip install pre-commit && pre-commit install`, then commit the
 updated previews together with your notebook changes. To regenerate them
-manually, run `pre-commit run notebook-previews --all-files`. CI fails if a
+manually, run `pre-commit run jupytext --all-files`. CI fails if a
 preview is missing or out of date.
 
 ### Running doctest
